@@ -15,5 +15,6 @@ public:
 	bool enableNetworkSlopePatch;
 	bool enableFlexPuzzlePiecePatch;
 	bool enableCommuteLoopPatch;
+	bool enableDirtRoadAccessPatch;
 	bool enableKeyboardShortcuts;
 };

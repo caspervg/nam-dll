@@ -11,6 +11,7 @@ Settings::Settings() :
 	enableNetworkSlopePatch(true),
 	enableFlexPuzzlePiecePatch(true),
 	enableCommuteLoopPatch(true),
+	enableDirtRoadAccessPatch(true),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -32,6 +33,7 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableNetworkSlopePatch", enableNetworkSlopePatch);
 			readBoolProp("EnableFlexPuzzlePiecePatch", enableFlexPuzzlePiecePatch);
 			readBoolProp("EnableCommuteLoopPatch", enableCommuteLoopPatch);
+			readBoolProp("EnableDirtRoadAccessPatch", enableDirtRoadAccessPatch);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}
