@@ -26,15 +26,14 @@ namespace
 
 	using namespace TransitAccessSupport;
 
+	TransitAccess::TransitAccessPatch sPatch;
 }
 
 namespace TransitAccess
 {
-	TransitAccessPatch patch;
-
 	bool __fastcall HookCalculateRoadAccess(cISC4Lot* lot, void*)
 	{
-		return patch.CalculateRoadAccess(lot);
+		return sPatch.CalculateRoadAccess(lot);
 	}
 
 	bool __fastcall HookGetSubnetworksForLot(
@@ -43,7 +42,7 @@ namespace TransitAccess
 		cISC4Lot* lot,
 		SC4Vector<uint32_t>& subnetworks)
 	{
-		return patch.GetSubnetworksForLot(trafficSimulator, lot, subnetworks);
+		return sPatch.GetSubnetworksForLot(trafficSimulator, lot, subnetworks);
 	}
 
 	uint32_t __fastcall HookGetConnectedDestinationCount(
@@ -52,17 +51,17 @@ namespace TransitAccess
 		cISC4Lot* lot,
 		int purpose)
 	{
-		return patch.GetConnectedDestinationCount(trafficSimulator, lot, purpose);
+		return sPatch.GetConnectedDestinationCount(trafficSimulator, lot, purpose);
 	}
 
 	bool __fastcall HookCreateStartNodes(void* pathFinder, void*)
 	{
-		return patch.CreateStartNodes(pathFinder);
+		return sPatch.CreateStartNodes(pathFinder);
 	}
 
 	bool __fastcall HookSetupPathFinderForLot(void* trafficSimulator, void*, void* pathFinder, cISC4Lot* lot)
 	{
-		return patch.SetupPathFinderForLot(trafficSimulator, pathFinder, lot);
+		return sPatch.SetupPathFinderForLot(trafficSimulator, pathFinder, lot);
 	}
 }
 
@@ -557,10 +556,10 @@ namespace TransitAccess
 
 void TransitAccess::Install()
 {
-	patch.Install();
+	sPatch.Install();
 }
 
 void TransitAccess::Shutdown()
 {
-	patch.Shutdown();
+	sPatch.Shutdown();
 }

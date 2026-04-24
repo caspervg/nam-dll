@@ -120,5 +120,4 @@ namespace TransitAccess
 		};
 	};
 
-	extern TransitAccessPatch patch;
 }
