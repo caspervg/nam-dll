@@ -87,36 +87,36 @@ namespace TransitAccess
 		bool trafficSimulatorHookInstalled = false;
 
 		Patching::InlineHook calculateRoadAccessHook{
-			0x006c1a30,
-			reinterpret_cast<void*>(&HookCalculateRoadAccess),
-			{0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8},
-			true,
-			0,
-			{},
-			nullptr,
-			false
+			.address = 0x006c1a30,
+			.hookFunction = reinterpret_cast<void*>(&HookCalculateRoadAccess),
+			.expectedPrologue = {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8},
+			.hasExpectedPrologue = true,
+			.patchAddress = 0,
+			.original = {},
+			.trampoline = nullptr,
+			.installed = false
 		};
 
 		Patching::InlineHook createStartNodesHook{
-			0x006d8a90,
-			reinterpret_cast<void*>(&HookCreateStartNodes),
-			{0x83, 0xec, 0x5c, 0x53, 0x55, 0x56},
-			true,
-			0,
-			{},
-			nullptr,
-			false
+			.address = 0x006d8a90,
+			.hookFunction = reinterpret_cast<void*>(&HookCreateStartNodes),
+			.expectedPrologue = {0x83, 0xec, 0x5c, 0x53, 0x55, 0x56},
+			.hasExpectedPrologue = true,
+			.patchAddress = 0,
+			.original = {},
+			.trampoline = nullptr,
+			.installed = false
 		};
 
 		Patching::InlineHook setupPathFinderForLotHook{
-			0x00711610,
-			reinterpret_cast<void*>(&HookSetupPathFinderForLot),
-			{0x83, 0xec, 0x14, 0x53, 0x55, 0x56},
-			true,
-			0,
-			{},
-			nullptr,
-			false
+			.address = 0x00711610,
+			.hookFunction = reinterpret_cast<void*>(&HookSetupPathFinderForLot),
+			.expectedPrologue = {0x83, 0xec, 0x14, 0x53, 0x55, 0x56},
+			.hasExpectedPrologue = true,
+			.patchAddress = 0,
+			.original = {},
+			.trampoline = nullptr,
+			.installed = false
 		};
 	};
 
