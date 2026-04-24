@@ -146,7 +146,7 @@ void Patching::InstallInlineHook(InlineHook& hook)
 		nullptr,
 		kInlineHookPatchByteCount + kJumpByteCount,
 		MEM_RESERVE | MEM_COMMIT,
-		PAGE_EXECUTE_READWRITE));
+		PAGE_READWRITE));
 	THROW_LAST_ERROR_IF_NULL(trampoline);
 
 	try
@@ -161,6 +161,14 @@ void Patching::InstallInlineHook(InlineHook& hook)
 		const int32_t hookRel = GetRelativeJumpOffset(
 			reinterpret_cast<uint32_t>(target),
 			reinterpret_cast<uint32_t>(hook.hookFunction));
+
+		DWORD trampolineOldProtect;
+		THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(
+			trampoline,
+			kInlineHookPatchByteCount + kJumpByteCount,
+			PAGE_EXECUTE_READ,
+			&trampolineOldProtect));
+		FlushInstructionCache(GetCurrentProcess(), trampoline, kInlineHookPatchByteCount + kJumpByteCount);
 
 		DWORD oldProtect;
 		THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(
