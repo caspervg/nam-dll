@@ -288,7 +288,6 @@ namespace TransitAccess
 			}
 		}
 
-		SetPathFinderSourceRect(pathFinder, originalRect);
 		return false;
 	}
 
