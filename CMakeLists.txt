@@ -23,6 +23,7 @@ set(NAM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(NAM_SOURCES
     src/Check4GBPatch.cpp
     src/CommuteLoop.cpp
+    src/DirtRoadAccess.cpp
     src/FlexPieces.cpp
     src/Logger.cpp
     src/NAMDllDirector.cpp
