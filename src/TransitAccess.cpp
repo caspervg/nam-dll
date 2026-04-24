@@ -120,7 +120,7 @@ namespace TransitAccess
 	bool TransitAccessPatch::GetLotSubnetworks(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks)
 	{
 		subnetworks.clear();
-		if (!trafficSimulator || !lot || !IsResidentialSourceLot(lot))
+		if (!trafficSimulator || !lot)
 		{
 			return false;
 		}
@@ -137,7 +137,7 @@ namespace TransitAccess
 		SC4Vector<uint32_t>& subnetworks)
 	{
 		subnetworks.clear();
-		if (!trafficSimulator || !lot)
+		if (!trafficSimulator || !lot || !IsResidentialSourceLot(lot))
 		{
 			return false;
 		}
