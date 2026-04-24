@@ -243,7 +243,12 @@ namespace TransitAccessSupport
 		{
 			for (int32_t z = sourceBounds.topLeftY - scanRadius; z <= sourceBounds.bottomRightY + scanRadius; ++z)
 			{
-				if (x < 0 || z < 0)
+				const bool insideSourceFootprint =
+					x >= sourceBounds.topLeftX
+					&& x <= sourceBounds.bottomRightX
+					&& z >= sourceBounds.topLeftY
+					&& z <= sourceBounds.bottomRightY;
+				if (x < 0 || z < 0 || insideSourceFootprint)
 				{
 					continue;
 				}
