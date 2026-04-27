@@ -6,6 +6,8 @@
 #include "cISC4City.h"
 #include "cISC4NetworkManager.h"
 #include "cISC4NetworkTool.h"
+#include "cISC4Occupant.h"
+#include "cISC4TrafficSimulator.h"
 #include "cISC4View3DWin.h"
 #include "cIGZUnknown.h"
 #include "cRZAutoRefCount.h"
@@ -144,6 +146,12 @@ namespace
 		return city ? reinterpret_cast<void*>(city->GetTrafficNetwork()) : nullptr;
 	}
 
+	cISC4TrafficSimulator* GetTrafficSimulator()
+	{
+		cISC4City* const city = GetCity();
+		return city ? city->GetTrafficSimulator() : nullptr;
+	}
+
 	cSC4NetworkTool* GetNetworkTool(cISC4NetworkManager* networkManager, cISC4NetworkOccupant::eNetworkType networkType)
 	{
 		if (!networkManager)
@@ -258,9 +266,13 @@ namespace
 	using SetOtherEndOccupantFn = void (__thiscall*)(cIGZUnknown* self, cISC4NetworkOccupant* otherEnd);
 	using GetPathInfoFn = void* (__thiscall*)(cIGZUnknown* self);
 	using InitTunnelPathFn = void (__thiscall*)(void* pathInfo, cIGZUnknown* self, cIGZUnknown* otherEnd);
+	using DoTunnelChangedFn = void (__thiscall*)(cISC4TrafficSimulator* trafficSimulator, cIGZUnknown* tunnelOccupant, bool added);
+	using DoConnectionsChangedFn = void (__thiscall*)(cISC4TrafficSimulator* trafficSimulator, uint32_t startX, uint32_t startZ, uint32_t endX, uint32_t endZ);
 
 	InsertTunnelPieceFn InsertTunnelPiece = reinterpret_cast<InsertTunnelPieceFn>(0x00628390);
 	SetOtherEndOccupantFn SetOtherEndOccupant = reinterpret_cast<SetOtherEndOccupantFn>(0x00647530);
+	DoTunnelChangedFn DoTunnelChanged = reinterpret_cast<DoTunnelChangedFn>(0x007140e0);
+	DoConnectionsChangedFn DoConnectionsChanged = reinterpret_cast<DoConnectionsChangedFn>(0x0071a860);
 
 	bool QueryTunnelOccupant(cISC4NetworkOccupant* occupant, cRZAutoRefCount<cIGZUnknown>& tunnelOccupant)
 	{
@@ -270,6 +282,38 @@ namespace
 		}
 
 		return occupant->QueryInterface(kNetworkTunnelOccupantID, tunnelOccupant.AsPPVoid()) && tunnelOccupant;
+	}
+
+	// Native PlaceNetwork calls cSC4NetworkConstructionCrew::MarkOccupantsUsable
+	// after InsertTunnelPieces. Direct insertion bypasses that commit-list pass.
+	void MarkNetworkOccupantUsable(cISC4NetworkOccupant* occupant, const char* label)
+	{
+		Logger& logger = Logger::GetInstance();
+
+		if (!occupant)
+		{
+			logger.WriteLineFormatted(LogLevel::Error,
+				"TunnelPortalTool: cannot mark %s occupant usable, occupant is null.", label);
+			return;
+		}
+
+		cISC4Occupant* const baseOccupant = occupant->AsOccupant();
+		if (!baseOccupant)
+		{
+			logger.WriteLineFormatted(LogLevel::Error,
+				"TunnelPortalTool: cannot mark %s occupant visible, AsOccupant returned null.", label);
+			return;
+		}
+
+		occupant->SetNetworkFlag(0x4000);
+		const uint8_t visibilityResult = baseOccupant->SetVisibility(true, true);
+		occupant->ClearNetworkFlag(0x10000000);
+
+		logger.WriteLineFormatted(LogLevel::Trace,
+			"TunnelPortalTool: marked %s tunnel occupant usable/visible, visibility result=%u flags=0x%08X.",
+			label,
+			static_cast<uint32_t>(visibilityResult),
+			occupant->GetNetworkFlag());
 	}
 
 	// Windows InsertTunnelPieces (0x006287d0) QueryInterfaces both occupants to
@@ -315,6 +359,35 @@ namespace
 			pathInfo,
 			self,
 			otherEnd);
+	}
+
+	void NotifyTrafficSimulatorForLinkedTunnels(
+		const Endpoint& first,
+		const Endpoint& second,
+		cIGZUnknown* firstTunnel,
+		cIGZUnknown* secondTunnel)
+	{
+		Logger& logger = Logger::GetInstance();
+		cISC4TrafficSimulator* const trafficSimulator = GetTrafficSimulator();
+
+		if (!trafficSimulator)
+		{
+			logger.WriteLine(LogLevel::Error, "TunnelPortalTool: cannot notify traffic simulator, no traffic simulator is available.");
+			return;
+		}
+
+		DoTunnelChanged(trafficSimulator, firstTunnel, true);
+		DoTunnelChanged(trafficSimulator, secondTunnel, true);
+		DoConnectionsChanged(trafficSimulator, first.x, first.z, first.x, first.z);
+		DoConnectionsChanged(trafficSimulator, second.x, second.z, second.x, second.z);
+
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: notified traffic simulator for linked tunnel endpoints (%u,%u) and (%u,%u).",
+			first.x,
+			first.z,
+			second.x,
+			second.z);
 	}
 
 	bool PlacePortalPair(const Endpoint& first, const Endpoint& second)
@@ -406,9 +479,12 @@ namespace
 
 		RefreshTunnelPathInfo(firstTunnel, secondTunnel);
 		RefreshTunnelPathInfo(secondTunnel, firstTunnel);
+		MarkNetworkOccupantUsable(firstOccupant, "first");
+		MarkNetworkOccupantUsable(secondOccupant, "second");
+		NotifyTrafficSimulatorForLinkedTunnels(first, second, firstTunnel, secondTunnel);
 		logger.WriteLine(
 			LogLevel::Trace,
-			"TunnelPortalTool: skipping synthetic occupant-added messages; InsertTunnelPiece already reached occupant manager insertion.");
+			"TunnelPortalTool: skipped synthetic occupant-added messages; traffic simulator was notified after tunnel linking.");
 
 		logger.WriteLineFormatted(
 			LogLevel::Info,

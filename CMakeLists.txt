@@ -34,17 +34,21 @@ set(NAM_SOURCES
     src/SC4VersionDetection.cpp
     src/Settings.cpp
     src/TransitAccess.cpp
+    src/TunnelPortalTool.cpp
     src/version.rc
 )
 
 set(GZCOM_SOURCES
+    vendor/gzcom-dll/gzcom-dll/src/cRZBaseUnknown.cpp
     vendor/gzcom-dll/gzcom-dll/src/cRZBaseString.cpp
     vendor/gzcom-dll/gzcom-dll/src/cRZBaseVariant.cpp
     vendor/gzcom-dll/gzcom-dll/src/cRZCOMDllDirector.cpp
     vendor/gzcom-dll/gzcom-dll/src/cRZMessage2.cpp
     vendor/gzcom-dll/gzcom-dll/src/cRZMessage2Standard.cpp
     vendor/gzcom-dll/gzcom-dll/src/cS3DVector3.cpp
+    vendor/gzcom-dll/gzcom-dll/src/cSC4BaseViewInputControl.cpp
     vendor/gzcom-dll/gzcom-dll/src/cSCBaseProperty.cpp
+    vendor/gzcom-dll/gzcom-dll/src/SC4UI.cpp
 )
 
 add_library(NAM SHARED ${NAM_SOURCES} ${GZCOM_SOURCES})
