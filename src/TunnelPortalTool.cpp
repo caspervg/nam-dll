@@ -41,6 +41,12 @@ namespace
 	constexpr uint32_t kTunnelCellNetworkFlag = 0x00080000;
 	constexpr uint32_t kNorthSouthPortalEdges = 0x02000200;
 	constexpr uint32_t kEastWestPortalEdges = 0x00020002;
+	constexpr std::array<uint32_t, 4> kSurfaceApproachEdgeForTunnelDirection = {
+		0x02000000, // tunnel faces north, surface approach is south
+		0x00000002, // tunnel faces east, surface approach is west
+		0x00000200, // tunnel faces south, surface approach is north
+		0x00020000, // tunnel faces west, surface approach is east
+	};
 
 	constexpr uint32_t NetworkMask(cISC4NetworkOccupant::eNetworkType type)
 	{
@@ -273,6 +279,55 @@ namespace
 		return (tunnelPieceDirection & 1) != 0
 			? kEastWestPortalEdges
 			: kNorthSouthPortalEdges;
+	}
+
+	bool TryInferTunnelPieceDirectionFromSurfaceApproach(
+		const char* label,
+		const cSC4NetworkCellInfo* cellInfo,
+		cISC4NetworkOccupant::eNetworkType networkType,
+		uint8_t& directionOut)
+	{
+		if (!cellInfo)
+		{
+			return false;
+		}
+
+		const uint32_t edgeFlags = cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)];
+		uint32_t matchedEdge = 0;
+		uint8_t matchedDirection = 0;
+		uint32_t matchCount = 0;
+
+		for (uint8_t direction = 0; direction < kSurfaceApproachEdgeForTunnelDirection.size(); ++direction)
+		{
+			const uint32_t edge = kSurfaceApproachEdgeForTunnelDirection[direction];
+			if ((edgeFlags & edge) != 0)
+			{
+				matchedDirection = direction;
+				matchedEdge = edge;
+				++matchCount;
+			}
+		}
+
+		if (matchCount == 1)
+		{
+			directionOut = matchedDirection;
+			Logger::GetInstance().WriteLineFormatted(
+				LogLevel::Trace,
+				"TunnelPortalTool: inferred %s tunnel direction=%u from single surface approach edge 0x%08X (networkEdge=0x%08X).",
+				label,
+				static_cast<uint32_t>(directionOut),
+				matchedEdge,
+				edgeFlags);
+			return true;
+		}
+
+		Logger::GetInstance().WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: could not infer %s tunnel direction from surface approach, matches=%u networkEdge=0x%08X.",
+			label,
+			matchCount,
+			edgeFlags);
+		return false;
 	}
 
 	using InsertTunnelPieceFn = cISC4NetworkOccupant* (__thiscall*)(
@@ -795,13 +850,29 @@ namespace
 		{
 			NetworkToolPlacementStateScope placementState(tool);
 			CustomTunnelInsertionScope customInsertion;
-			const uint8_t firstDirection = InferTunnelPieceDirection(first, second);
-			const uint8_t secondDirection = (firstDirection + 2) & 3;
+			const uint8_t firstVectorDirection = InferTunnelPieceDirection(first, second);
+			const uint8_t secondVectorDirection = InferTunnelPieceDirection(second, first);
+			uint8_t firstDirection = firstVectorDirection;
+			uint8_t secondDirection = secondVectorDirection;
+			const bool inferredFirstDirection = TryInferTunnelPieceDirectionFromSurfaceApproach(
+				"first",
+				firstCell,
+				first.networkType,
+				firstDirection);
+			const bool inferredSecondDirection = TryInferTunnelPieceDirectionFromSurfaceApproach(
+				"second",
+				secondCell,
+				second.networkType,
+				secondDirection);
 			logger.WriteLineFormatted(
 				LogLevel::Trace,
-				"TunnelPortalTool: tunnel piece directions first=%u second=%u.",
+				"TunnelPortalTool: tunnel piece directions first=%u (%s) second=%u (%s), vectorFallback first=%u second=%u.",
 				static_cast<uint32_t>(firstDirection),
-				static_cast<uint32_t>(secondDirection));
+				inferredFirstDirection ? "surface approach" : "vector",
+				static_cast<uint32_t>(secondDirection),
+				inferredSecondDirection ? "surface approach" : "vector",
+				static_cast<uint32_t>(firstVectorDirection),
+				static_cast<uint32_t>(secondVectorDirection));
 			PrepareTunnelEndpointCell("first", firstCell, first.networkType, firstDirection);
 			PrepareTunnelEndpointCell("second", secondCell, second.networkType, secondDirection);
 			TraceCellInfoState("first prepared for tunnel insertion", firstCell, first.networkType);
