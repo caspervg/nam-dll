@@ -197,6 +197,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
 		InstallWhen(settings.enableDirtRoadAccessPatch, "DirtRoad/RHW Access patch", DirtRoadAccess::Install);
 		InstallWhen(settings.enableTransitAccessPatch, "Transit Access patch", TransitAccess::Install);
+		InstallWhen(settings.enableExperimentalTunnelPortalTool, "Tunnel Portal Tool diagnostics", TunnelPortalTool::InstallDiagnostics);
 	}
 }
 

@@ -10,10 +10,12 @@
 #include "cISC4TrafficSimulator.h"
 #include "cISC4View3DWin.h"
 #include "cIGZUnknown.h"
+#include "cIS3DModelInstance.h"
 #include "cRZAutoRefCount.h"
 #include "cRZBaseString.h"
 #include "cSC4BaseViewInputControl.h"
 #include "GZCLSIDDefs.h"
+#include "Patching.h"
 
 #define NOMINMAX
 #include <Windows.h>
@@ -31,7 +33,14 @@ namespace
 	constexpr size_t kNetworkToolPlacingModeOffset = 0x50;
 	constexpr size_t kNetworkToolPlacementStageOffset = 0x208;
 	constexpr size_t kNetworkToolFailureCodeOffset = 0x20c;
+	constexpr size_t kNetworkToolTunnelExemplarsOffset = 0x2e4;
+	constexpr size_t kNetworkToolTunnelRotationOffsetsOffset = 0x2f0;
+	constexpr size_t kNetworkToolDefaultExemplarGroupOffset = 0x358;
+	constexpr size_t kNetworkToolTunnelRecordsOffset = 0xe4;
 	constexpr size_t kCellInfoInsertResultOffset = 0x54;
+	constexpr uint32_t kTunnelCellNetworkFlag = 0x00080000;
+	constexpr uint32_t kNorthSouthPortalEdges = 0x02000200;
+	constexpr uint32_t kEastWestPortalEdges = 0x00020002;
 
 	constexpr uint32_t NetworkMask(cISC4NetworkOccupant::eNetworkType type)
 	{
@@ -244,17 +253,26 @@ namespace
 		return false;
 	}
 
-	uint8_t InferDirection(const Endpoint& from, const Endpoint& to)
+	uint8_t InferTunnelPieceDirection(const Endpoint& from, const Endpoint& to)
 	{
 		const int32_t dx = static_cast<int32_t>(to.x) - static_cast<int32_t>(from.x);
 		const int32_t dz = static_cast<int32_t>(to.z) - static_cast<int32_t>(from.z);
 
+		// InsertTunnelPieces uses a tunnel-piece rotation code, not the
+		// kNextX/kNextZ direction numbering used by path code.
 		if (std::abs(dx) >= std::abs(dz))
 		{
-			return dx >= 0 ? 2 : 0; // east/west, matching kNextX in NetworkStubs.h
+			return dx >= 0 ? 1 : 3;
 		}
 
-		return dz >= 0 ? 3 : 1; // south/north, matching kNextZ in NetworkStubs.h
+		return dz >= 0 ? 2 : 0;
+	}
+
+	uint32_t GetPortalAxisEdges(uint8_t tunnelPieceDirection)
+	{
+		return (tunnelPieceDirection & 1) != 0
+			? kEastWestPortalEdges
+			: kNorthSouthPortalEdges;
 	}
 
 	using InsertTunnelPieceFn = cISC4NetworkOccupant* (__thiscall*)(
@@ -268,11 +286,104 @@ namespace
 	using InitTunnelPathFn = void (__thiscall*)(void* pathInfo, cIGZUnknown* self, cIGZUnknown* otherEnd);
 	using DoTunnelChangedFn = void (__thiscall*)(cISC4TrafficSimulator* trafficSimulator, cIGZUnknown* tunnelOccupant, bool added);
 	using DoConnectionsChangedFn = void (__thiscall*)(cISC4TrafficSimulator* trafficSimulator, uint32_t startX, uint32_t startZ, uint32_t endX, uint32_t endZ);
+	using GetOccupantExemplarFn = cIGZUnknown* (__thiscall*)(cSC4NetworkTool* tool, uint32_t exemplarId, uint32_t groupId);
 
 	InsertTunnelPieceFn InsertTunnelPiece = reinterpret_cast<InsertTunnelPieceFn>(0x00628390);
 	SetOtherEndOccupantFn SetOtherEndOccupant = reinterpret_cast<SetOtherEndOccupantFn>(0x00647530);
 	DoTunnelChangedFn DoTunnelChanged = reinterpret_cast<DoTunnelChangedFn>(0x007140e0);
 	DoConnectionsChangedFn DoConnectionsChanged = reinterpret_cast<DoConnectionsChangedFn>(0x0071a860);
+	GetOccupantExemplarFn GetOccupantExemplar = reinterpret_cast<GetOccupantExemplarFn>(0x006244b0);
+
+	uint32_t sCustomTunnelInsertionDepth = 0;
+
+	class CustomTunnelInsertionScope
+	{
+	public:
+		CustomTunnelInsertionScope()
+		{
+			++sCustomTunnelInsertionDepth;
+		}
+
+		~CustomTunnelInsertionScope()
+		{
+			--sCustomTunnelInsertionDepth;
+		}
+	};
+
+	size_t VectorCountAt(const void* object, size_t offset, size_t itemSize)
+	{
+		const uint8_t* const base = reinterpret_cast<const uint8_t*>(object) + offset;
+		const auto start = *reinterpret_cast<const uintptr_t*>(base);
+		const auto end = *reinterpret_cast<const uintptr_t*>(base + sizeof(uintptr_t));
+
+		if (start == 0 || end < start || itemSize == 0)
+		{
+			return 0;
+		}
+
+		return static_cast<size_t>((end - start) / itemSize);
+	}
+
+	void TraceNetworkToolPlacementContext(const char* label, cSC4NetworkTool* tool)
+	{
+		Logger& logger = Logger::GetInstance();
+
+		if (!tool)
+		{
+			logger.WriteLineFormatted(LogLevel::Trace,
+				"TunnelPortalTool: %s tool context is null.", label);
+			return;
+		}
+
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: %s tool=%p placing=%u stage=%u failure=0x%08X draggedSteps=%u draggedCells=%u solvedCells=%u tunnelRecords=%u occManager=%p.",
+			label,
+			tool,
+			static_cast<uint32_t>(FieldAt<uint8_t>(tool, kNetworkToolPlacingModeOffset)),
+			FieldAt<uint32_t>(tool, kNetworkToolPlacementStageOffset),
+			FieldAt<uint32_t>(tool, kNetworkToolFailureCodeOffset),
+			static_cast<uint32_t>(VectorCountAt(tool, offsetof(cSC4NetworkTool, draggedSteps), sizeof(cSC4NetworkTool::tDraggedStep))),
+			static_cast<uint32_t>(VectorCountAt(tool, offsetof(cSC4NetworkTool, draggedCells), sizeof(SC4Point<uint32_t>))),
+			static_cast<uint32_t>(VectorCountAt(tool, offsetof(cSC4NetworkTool, solvedCells), sizeof(cSC4NetworkTool::tSolvedCell))),
+			static_cast<uint32_t>(VectorCountAt(tool, kNetworkToolTunnelRecordsOffset, 0x10)),
+			FieldAt<void*>(tool, 0x48));
+	}
+
+	void PrepareTunnelEndpointCell(
+		const char* label,
+		cSC4NetworkCellInfo* cellInfo,
+		cISC4NetworkOccupant::eNetworkType networkType,
+		uint8_t tunnelPieceDirection)
+	{
+		if (!cellInfo)
+		{
+			return;
+		}
+
+		const uint32_t oldNetworkFlags = cellInfo->networkTypeFlags;
+		const uint32_t oldCombinedEdges = cellInfo->edgeFlagsCombined;
+		const uint32_t oldNetworkEdges = cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)];
+		const uint32_t portalEdges = GetPortalAxisEdges(tunnelPieceDirection);
+
+		cellInfo->networkTypeFlags |= kTunnelCellNetworkFlag;
+		cellInfo->edgeFlagsCombined |= portalEdges;
+		cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)] |= portalEdges;
+		FieldAt<uint8_t>(cellInfo, 0x51) = 1;
+		FieldAt<uint8_t>(cellInfo, 0x53) = 1;
+
+		Logger::GetInstance().WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: prepared %s tunnel endpoint cell direction=%u flags 0x%08X->0x%08X edges 0x%08X/0x%08X->0x%08X/0x%08X.",
+			label,
+			static_cast<uint32_t>(tunnelPieceDirection),
+			oldNetworkFlags,
+			cellInfo->networkTypeFlags,
+			oldCombinedEdges,
+			oldNetworkEdges,
+			cellInfo->edgeFlagsCombined,
+			cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)]);
+	}
 
 	bool QueryTunnelOccupant(cISC4NetworkOccupant* occupant, cRZAutoRefCount<cIGZUnknown>& tunnelOccupant)
 	{
@@ -282,6 +393,255 @@ namespace
 		}
 
 		return occupant->QueryInterface(kNetworkTunnelOccupantID, tunnelOccupant.AsPPVoid()) && tunnelOccupant;
+	}
+
+	void TraceCellInfoState(
+		const char* label,
+		const cSC4NetworkCellInfo* cellInfo,
+		cISC4NetworkOccupant::eNetworkType networkType)
+	{
+		Logger& logger = Logger::GetInstance();
+
+		if (!cellInfo)
+		{
+			logger.WriteLineFormatted(LogLevel::Trace,
+				"TunnelPortalTool: %s cell info is null.", label);
+			return;
+		}
+
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: %s cell (%u,%u) flags=0x%08X edgeFlags=0x%08X networkEdge=0x%08X occ=%p idx=%d insert=%u bytes51-57=%02X %02X %02X %02X %02X %02X %02X vertices=%d,%d,%d,%d.",
+			label,
+			cellInfo->x,
+			cellInfo->z,
+			cellInfo->networkTypeFlags,
+			cellInfo->edgeFlagsCombined,
+			cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)],
+			cellInfo->networkOccupant,
+			cellInfo->idxInCellsBuffer,
+			static_cast<uint32_t>(FieldAt<uint8_t>(cellInfo, kCellInfoInsertResultOffset) != 0),
+			static_cast<uint32_t>(FieldAt<uint8_t>(cellInfo, 0x51)),
+			static_cast<uint32_t>(FieldAt<uint8_t>(cellInfo, 0x52)),
+			static_cast<uint32_t>(FieldAt<uint8_t>(cellInfo, 0x53)),
+			static_cast<uint32_t>(FieldAt<uint8_t>(cellInfo, 0x54)),
+			static_cast<uint32_t>(FieldAt<uint8_t>(cellInfo, 0x55)),
+			static_cast<uint32_t>(FieldAt<uint8_t>(cellInfo, 0x56)),
+			static_cast<uint32_t>(FieldAt<uint8_t>(cellInfo, 0x57)),
+			cellInfo->vertices[0],
+			cellInfo->vertices[1],
+			cellInfo->vertices[2],
+			cellInfo->vertices[3]);
+	}
+
+	void TraceTunnelExemplarState(cSC4NetworkTool* tool)
+	{
+		Logger& logger = Logger::GetInstance();
+
+		if (!tool)
+		{
+			return;
+		}
+
+		const uint32_t* const* const exemplars = reinterpret_cast<const uint32_t* const*>(
+			reinterpret_cast<const uint8_t*>(tool) + kNetworkToolTunnelExemplarsOffset);
+		const uint32_t* const exemplarStart = exemplars[0];
+		const uint32_t* const exemplarEnd = exemplars[1];
+		const uint32_t* const exemplarCapacity = exemplars[2];
+
+		const uint32_t* const* const rotationOffsets = reinterpret_cast<const uint32_t* const*>(
+			reinterpret_cast<const uint8_t*>(tool) + kNetworkToolTunnelRotationOffsetsOffset);
+		const uint32_t* const rotationStart = rotationOffsets[0];
+		const uint32_t* const rotationEnd = rotationOffsets[1];
+
+		uint32_t defaultGroup = 0;
+		const void* const defaultGroupBlock = FieldAt<const void*>(tool, kNetworkToolDefaultExemplarGroupOffset);
+		if (defaultGroupBlock)
+		{
+			defaultGroup = FieldAt<uint32_t>(defaultGroupBlock, 0x0c);
+		}
+
+		const size_t exemplarCount = exemplarStart && exemplarEnd && exemplarEnd >= exemplarStart
+			? static_cast<size_t>(exemplarEnd - exemplarStart)
+			: 0;
+		const size_t rotationCount = rotationStart && rotationEnd && rotationEnd >= rotationStart
+			? static_cast<size_t>(rotationEnd - rotationStart)
+			: 0;
+
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: tunnel exemplar vector start=%p end=%p cap=%p count=%u rotationStart=%p rotationEnd=%p rotationCount=%u defaultGroup=0x%08X.",
+			exemplarStart,
+			exemplarEnd,
+			exemplarCapacity,
+			static_cast<uint32_t>(exemplarCount),
+			rotationStart,
+			rotationEnd,
+			static_cast<uint32_t>(rotationCount),
+			defaultGroup);
+
+		const size_t traceCount = std::min<size_t>(exemplarCount, 12);
+		for (size_t i = 0; i < traceCount; ++i)
+		{
+			const uint32_t rotationOffset = i < rotationCount ? rotationStart[i] : 0xffffffff;
+			cIGZUnknown* const exemplar = GetOccupantExemplar(tool, exemplarStart[i], 0);
+			logger.WriteLineFormatted(
+				LogLevel::Trace,
+				"TunnelPortalTool: tunnel exemplar[%u]=0x%08X rotationOffset=%u resolved=%p.",
+				static_cast<uint32_t>(i),
+				exemplarStart[i],
+				rotationOffset,
+				exemplar);
+			if (exemplar)
+			{
+				exemplar->Release();
+			}
+		}
+	}
+
+	void TraceNetworkOccupantState(const char* label, cISC4NetworkOccupant* occupant)
+	{
+		Logger& logger = Logger::GetInstance();
+
+		if (!occupant)
+		{
+			logger.WriteLineFormatted(LogLevel::Trace,
+				"TunnelPortalTool: %s network occupant is null.", label);
+			return;
+		}
+
+		cRZAutoRefCount<cIGZUnknown> preBuiltModel;
+		const bool hasPreBuiltModel = occupant->QueryInterface(
+			GZCLSID::kcSC4NetworkOccupantWithPreBuiltModel,
+			preBuiltModel.AsPPVoid()) && preBuiltModel;
+
+		uint32_t occupiedX = 0;
+		uint32_t occupiedZ = 0;
+		occupant->GetOccupiedCell(occupiedX, occupiedZ);
+
+		cISC4Occupant* const baseOccupant = occupant->AsOccupant();
+		const uint32_t baseFlags = baseOccupant ? baseOccupant->GetFlags() : 0;
+		void* const placeableObject = baseOccupant ? baseOccupant->GetPlaceableObject() : nullptr;
+
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: %s occupant=%p prebuilt=%u piece=0x%08X rot=%u flip=%u rf=%u variation=%u networkFlags=0x%08X usable=%u placed=%u viewDependent=%u occupied=(%u,%u) base=%p baseFlags=0x%08X placeable=%p pathInfo=0x%08X.",
+			label,
+			occupant,
+			static_cast<uint32_t>(hasPreBuiltModel),
+			occupant->PieceId(),
+			static_cast<uint32_t>(occupant->GetRotation()),
+			static_cast<uint32_t>(occupant->GetFlip()),
+			static_cast<uint32_t>(occupant->GetRotationAndFlip()),
+			static_cast<uint32_t>(occupant->GetVariation()),
+			occupant->GetNetworkFlag(),
+			static_cast<uint32_t>(occupant->IsUsable()),
+			static_cast<uint32_t>(occupant->IsPlaced()),
+			static_cast<uint32_t>(occupant->HasViewDependentModel()),
+			occupiedX,
+			occupiedZ,
+			baseOccupant,
+			baseFlags,
+			placeableObject,
+			static_cast<uint32_t>(occupant->GetPathInfo()));
+	}
+
+	void TraceModelInstances(const char* label, cISC4NetworkOccupant* occupant)
+	{
+		Logger& logger = Logger::GetInstance();
+
+		if (!occupant)
+		{
+			return;
+		}
+
+		for (int32_t zoom = 0; zoom <= 5; ++zoom)
+		{
+			cIS3DModelInstance* modelInstances[4] = {};
+			int32_t modelInstanceCount = 0;
+			occupant->GetModelInstances(zoom, 0, modelInstances, 4, &modelInstanceCount);
+
+			logger.WriteLineFormatted(
+				LogLevel::Trace,
+				"TunnelPortalTool: %s GetModelInstances zoom=%d count=%d first=%p.",
+				label,
+				zoom,
+				modelInstanceCount,
+				modelInstances[0]);
+
+			for (int32_t i = 0; i < modelInstanceCount && i < 4; ++i)
+			{
+				if (modelInstances[i])
+				{
+					modelInstances[i]->Release();
+				}
+			}
+		}
+	}
+
+	cISC4NetworkOccupant* __fastcall Hook_InsertTunnelPiece(
+		cSC4NetworkTool* tool,
+		void*,
+		uint8_t direction,
+		uint8_t sequenceIndex,
+		cSC4NetworkCellInfo* cellInfo);
+
+	Patching::InlineHook sInsertTunnelPieceHook{
+		0x00628390,
+		reinterpret_cast<void*>(&Hook_InsertTunnelPiece),
+		{ 0x83, 0xEC, 0x60, 0x56, 0x8B, 0xF1 },
+		true
+	};
+
+	cISC4NetworkOccupant* __fastcall Hook_InsertTunnelPiece(
+		cSC4NetworkTool* tool,
+		void*,
+		uint8_t direction,
+		uint8_t sequenceIndex,
+		cSC4NetworkCellInfo* cellInfo)
+	{
+		Logger& logger = Logger::GetInstance();
+		const char* const source = sCustomTunnelInsertionDepth != 0 ? "custom" : "native";
+
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: InsertTunnelPiece hook enter source=%s tool=%p direction=%u sequence=%u cell=%p.",
+			source,
+			tool,
+			static_cast<uint32_t>(direction),
+			static_cast<uint32_t>(sequenceIndex),
+			cellInfo);
+		TraceNetworkToolPlacementContext("InsertTunnelPiece hook before", tool);
+
+		if (cellInfo)
+		{
+			TraceCellInfoState(
+				"InsertTunnelPiece hook before",
+				cellInfo,
+				cSC4NetworkTool::GetFirstNetworkTypeFromFlags(cellInfo->networkTypeFlags));
+		}
+
+		const auto original = reinterpret_cast<InsertTunnelPieceFn>(sInsertTunnelPieceHook.trampoline);
+		cISC4NetworkOccupant* const result = original
+			? original(tool, direction, sequenceIndex, cellInfo)
+			: nullptr;
+
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: InsertTunnelPiece hook exit source=%s result=%p.",
+			source,
+			result);
+
+		if (cellInfo)
+		{
+			TraceCellInfoState(
+				"InsertTunnelPiece hook after",
+				cellInfo,
+				cSC4NetworkTool::GetFirstNetworkTypeFromFlags(cellInfo->networkTypeFlags));
+		}
+		TraceNetworkOccupantState("InsertTunnelPiece hook result", result);
+
+		return result;
 	}
 
 	// Native PlaceNetwork calls cSC4NetworkConstructionCrew::MarkOccupantsUsable
@@ -305,9 +665,9 @@ namespace
 			return;
 		}
 
-		occupant->SetNetworkFlag(0x4000);
+		occupant->ClearNetworkFlag(0x4000);
 		const uint8_t visibilityResult = baseOccupant->SetVisibility(true, true);
-		occupant->ClearNetworkFlag(0x10000000);
+		occupant->SetNetworkFlag(0x10000000);
 
 		logger.WriteLineFormatted(LogLevel::Trace,
 			"TunnelPortalTool: marked %s tunnel occupant usable/visible, visibility result=%u flags=0x%08X.",
@@ -426,15 +786,28 @@ namespace
 			return false;
 		}
 
-		reinterpret_cast<uint8_t*>(firstCell)[0x51] = 1;
-		reinterpret_cast<uint8_t*>(secondCell)[0x51] = 1;
+		TraceTunnelExemplarState(tool);
+		TraceCellInfoState("first before tunnel insertion", firstCell, first.networkType);
+		TraceCellInfoState("second before tunnel insertion", secondCell, second.networkType);
 
 		cISC4NetworkOccupant* firstOccupant = nullptr;
 		cISC4NetworkOccupant* secondOccupant = nullptr;
 		{
 			NetworkToolPlacementStateScope placementState(tool);
-			firstOccupant = InsertTunnelPiece(tool, InferDirection(second, first), 0, firstCell);
-			secondOccupant = InsertTunnelPiece(tool, InferDirection(first, second), 0, secondCell);
+			CustomTunnelInsertionScope customInsertion;
+			const uint8_t firstDirection = InferTunnelPieceDirection(first, second);
+			const uint8_t secondDirection = (firstDirection + 2) & 3;
+			logger.WriteLineFormatted(
+				LogLevel::Trace,
+				"TunnelPortalTool: tunnel piece directions first=%u second=%u.",
+				static_cast<uint32_t>(firstDirection),
+				static_cast<uint32_t>(secondDirection));
+			PrepareTunnelEndpointCell("first", firstCell, first.networkType, firstDirection);
+			PrepareTunnelEndpointCell("second", secondCell, second.networkType, secondDirection);
+			TraceCellInfoState("first prepared for tunnel insertion", firstCell, first.networkType);
+			TraceCellInfoState("second prepared for tunnel insertion", secondCell, second.networkType);
+			firstOccupant = InsertTunnelPiece(tool, firstDirection, 0, firstCell);
+			secondOccupant = InsertTunnelPiece(tool, secondDirection, 0, secondCell);
 		}
 
 		if (!firstOccupant || !secondOccupant)
@@ -448,6 +821,12 @@ namespace
 			"TunnelPortalTool: InsertTunnelPiece returned first=%p second=%p.",
 			firstOccupant,
 			secondOccupant);
+		TraceCellInfoState("first after tunnel insertion", firstCell, first.networkType);
+		TraceCellInfoState("second after tunnel insertion", secondCell, second.networkType);
+		TraceNetworkOccupantState("first after tunnel insertion", firstOccupant);
+		TraceNetworkOccupantState("second after tunnel insertion", secondOccupant);
+		TraceModelInstances("first after tunnel insertion", firstOccupant);
+		TraceModelInstances("second after tunnel insertion", secondOccupant);
 		logger.WriteLineFormatted(
 			LogLevel::Trace,
 			"TunnelPortalTool: occupant manager insert flags first=%u second=%u.",
@@ -481,6 +860,10 @@ namespace
 		RefreshTunnelPathInfo(secondTunnel, firstTunnel);
 		MarkNetworkOccupantUsable(firstOccupant, "first");
 		MarkNetworkOccupantUsable(secondOccupant, "second");
+		TraceNetworkOccupantState("first after mark usable", firstOccupant);
+		TraceNetworkOccupantState("second after mark usable", secondOccupant);
+		TraceModelInstances("first after mark usable", firstOccupant);
+		TraceModelInstances("second after mark usable", secondOccupant);
 		NotifyTrafficSimulatorForLinkedTunnels(first, second, firstTunnel, secondTunnel);
 		logger.WriteLine(
 			LogLevel::Trace,
@@ -735,4 +1118,9 @@ bool TunnelPortalTool::Activate(cISC4View3DWin* view3D)
 	}
 
 	return activated;
+}
+
+void TunnelPortalTool::InstallDiagnostics()
+{
+	Patching::InstallInlineHook(sInsertTunnelPieceHook);
 }
