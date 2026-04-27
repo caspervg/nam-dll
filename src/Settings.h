@@ -18,4 +18,5 @@ public:
 	bool enableDirtRoadAccessPatch;
 	bool enableTransitAccessPatch;
 	bool enableKeyboardShortcuts;
+	bool enableExperimentalTunnelPortalTool;
 };

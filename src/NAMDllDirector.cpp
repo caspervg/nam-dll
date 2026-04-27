@@ -52,6 +52,8 @@
 #include "CommuteLoop.h"
 #include "DirtRoadAccess.h"
 #include "TransitAccess.h"
+#include "TunnelPortalTool.h"
+#include "SC4UI.h"
 
 static constexpr uint32_t kNAMDllDirectorID = 0x4AC2AEFF;
 
@@ -61,6 +63,7 @@ static constexpr uint32_t kMonorailKeyboardShortcut = 0x8BE098F4;
 static constexpr uint32_t kOneWayRoadKeyboardShortcut = 0x4BE098F7;
 static constexpr uint32_t kDirtRoadKeyboardShortcut = 0x6BE098FA;
 static constexpr uint32_t kGroundHighwayKeyboardShortcut = 0x4BE098FD;
+static constexpr uint32_t kExperimentalTunnelPortalToolShortcut = 0x4A7B6E30;
 
 static constexpr uint32_t kGZWin_WinSC4App = 0x6104489a;
 static constexpr uint32_t kGZWin_SC4View3DWin = 0x9a47b417;
@@ -204,7 +207,7 @@ public:
 	NAMDllDirector() : settings()
 	{
 		Logger& logger = Logger::GetInstance();
-		logger.Init(GetDllFolderPath() / PluginLogFileName, LogLevel::Error);
+		logger.Init(GetDllFolderPath() / PluginLogFileName, LogLevel::Trace);
 		logger.WriteLogFileHeader("NAM DLL v" PLUGIN_VERSION_STR);
 		Check4GBPatch::WritePatchStatusToLogFile();
 	}
@@ -261,7 +264,10 @@ public:
 
 								if (pKeyAccelerator)
 								{
-									pKeyAcceleratorRes->RegisterResources(pKeyAccelerator);
+									if (settings.enableKeyboardShortcuts)
+									{
+										pKeyAcceleratorRes->RegisterResources(pKeyAccelerator);
+									}
 								}
 							}
 						}
@@ -299,7 +305,10 @@ public:
 		RegisterDllVersionInLua();
 		static bool logged = false;  // write log only once
 		if (!logged) {
-			InstallWhen(settings.enableKeyboardShortcuts, "Keyboard Shortcuts for Monorail, Onewayroad, Groundhighway, RHW", [this](){ this->RegisterKeyboardShortcuts(); });
+			InstallWhen(
+				settings.enableKeyboardShortcuts || settings.enableExperimentalTunnelPortalTool,
+				"Keyboard Shortcuts for NAM tools",
+				[this](){ this->RegisterKeyboardShortcuts(); });
 			logged = true;
 		} else {
 			RegisterKeyboardShortcuts();
@@ -344,6 +353,22 @@ public:
 		}
 	}
 
+	void ActivateTunnelPortalTool()
+	{
+		cRZAutoRefCount<cISC4View3DWin> view3D = SC4UI::GetView3DWin();
+		Logger::GetInstance().WriteLineFormatted(
+			LogLevel::Debug,
+			"TunnelPortalTool: ActivateTunnelPortalTool view3D=%p.",
+			static_cast<cISC4View3DWin*>(view3D));
+		if (view3D)
+		{
+			if (!TunnelPortalTool::Activate(view3D))
+			{
+				Logger::GetInstance().WriteLine(LogLevel::Error, "Failed to activate the experimental tunnel portal tool.");
+			}
+		}
+	}
+
 	bool DoMessage(cIGZMessage2* pMsg)
 	{
 		cIGZMessage2Standard* pStandardMessage = static_cast<cIGZMessage2Standard*>(pMsg);
@@ -359,6 +384,17 @@ public:
 		case kDirtRoadKeyboardShortcut:
 		case kGroundHighwayKeyboardShortcut:
 			ProcessKeyboardShortcut(msgType);
+			break;
+		case kExperimentalTunnelPortalToolShortcut:
+			Logger::GetInstance().WriteLineFormatted(
+				LogLevel::Debug,
+				"TunnelPortalTool: shortcut command 0x%08X received, enabled=%d.",
+				msgType,
+				settings.enableExperimentalTunnelPortalTool ? 1 : 0);
+			if (settings.enableExperimentalTunnelPortalTool)
+			{
+				ActivateTunnelPortalTool();
+			}
 			break;
 		}
 
@@ -378,6 +414,10 @@ public:
 			requiredNotifications.push_back(kDirtRoadKeyboardShortcut);
 			requiredNotifications.push_back(kGroundHighwayKeyboardShortcut);
 			requiredNotifications.push_back(kSC4MessagePostCityInit);
+			if (settings.enableExperimentalTunnelPortalTool)
+			{
+				requiredNotifications.push_back(kExperimentalTunnelPortalToolShortcut);
+			}
 
 			for (uint32_t messageID : requiredNotifications)
 			{
