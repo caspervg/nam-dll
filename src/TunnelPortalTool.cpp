@@ -343,6 +343,11 @@ namespace
 	using DoConnectionsChangedFn = void (__thiscall*)(cISC4TrafficSimulator* trafficSimulator, uint32_t startX, uint32_t startZ, uint32_t endX, uint32_t endZ);
 	using GetOccupantExemplarFn = cIGZUnknown* (__thiscall*)(cSC4NetworkTool* tool, uint32_t exemplarId, uint32_t groupId);
 
+	// When non-0xFF, Hook_InitTunnelPath replaces the coordinate-derived direction
+	// with this value so MakeTunnelPaths stitches the portal's actual facing axis.
+	// 0=north, 1=east, 2=south, 3=west — same numbering as tunnelPieceDirection.
+	uint8_t sCustomPortalFacingOverride = 0xFF;
+
 	InsertTunnelPieceFn InsertTunnelPiece = reinterpret_cast<InsertTunnelPieceFn>(0x00628390);
 	SetOtherEndOccupantFn SetOtherEndOccupant = reinterpret_cast<SetOtherEndOccupantFn>(0x00647530);
 	DoTunnelChangedFn DoTunnelChanged = reinterpret_cast<DoTunnelChangedFn>(0x007140e0);
@@ -409,7 +414,8 @@ namespace
 		const char* label,
 		cSC4NetworkCellInfo* cellInfo,
 		cISC4NetworkOccupant::eNetworkType networkType,
-		uint8_t tunnelPieceDirection)
+		uint8_t tunnelPieceDirection,
+		uint8_t pathStitchDirection)
 	{
 		if (!cellInfo)
 		{
@@ -419,11 +425,17 @@ namespace
 		const uint32_t oldNetworkFlags = cellInfo->networkTypeFlags;
 		const uint32_t oldCombinedEdges = cellInfo->edgeFlagsCombined;
 		const uint32_t oldNetworkEdges = cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)];
-		const uint32_t portalEdges = GetPortalAxisEdges(tunnelPieceDirection);
+		// MakeTunnelPaths computes ONE cardinal direction from cell coordinates and filters
+		// path entries by it. For mixed-axis portals the coordinate direction may differ from
+		// the portal's facing, so whichever axis native stitching picks it must find entries on
+		// both sides. Providing all four direction flags ensures entries for every possible
+		// computed direction exist on both portals, making bidirectional stitching work regardless
+		// of axis alignment.
+		const uint32_t preparedEdges = kNorthSouthPortalEdges | kEastWestPortalEdges;
 
 		cellInfo->networkTypeFlags |= kTunnelCellNetworkFlag;
-		cellInfo->edgeFlagsCombined |= portalEdges;
-		cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)] |= portalEdges;
+		cellInfo->edgeFlagsCombined |= preparedEdges;
+		cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)] |= preparedEdges;
 		FieldAt<uint8_t>(cellInfo, 0x51) = 1;
 		FieldAt<uint8_t>(cellInfo, 0x53) = 1;
 
@@ -731,10 +743,56 @@ namespace
 			occupant->GetNetworkFlag());
 	}
 
+	// Trampoline pointer used by the naked assembly stub below.
+	// Set by InstallDiagnostics after sInitTunnelPathHook is installed.
+	void* sInitTunnelPathTrampolinePtr = nullptr;
+
+	// Mid-function hook targeting the 6-byte "call [edx+0xC4]" at 0x0053FDEE inside
+	// cSC4PathInfo::MakeTunnelPaths (confirmed function entry: 0x0053FD70).
+	//
+	// MakeTunnelPaths computes a cardinal direction from A's cell to B's cell and stores it
+	// as a byte at [esp+0x58] (param_1 slot reused as a local after the arg is loaded into
+	// registers). Prologue: sub esp,0x44 + push ebx,ebp,esi,edi = 0x54 total; param_1 at
+	// entry+4 → [esp+0x58] inside the function. All five direction-assignment instructions
+	// (C6 44 24 58 00/01/02/03) complete before 0x0053FDEE. By overwriting [esp+0x58] here,
+	// after the coordinate comparison but before the loop reads it, we redirect path stitching
+	// to the portal's actual facing direction instead of the coordinate-derived one.
+	//
+	// Register state at 0x0053FDEE (set by the two preceding instructions at 0x0053FDEA/EC):
+	//   edx = vtable of esi (otherEnd's vtable) → used by the original call [edx+0xC4]
+	//   ecx = esi = otherEnd                    → thiscall receiver for GetPathInfo
+	//   eax = clobbered freely by our mov al    → overwritten by the call's return value
+	//   esi = otherEnd (preserved, not touched)
+	//   edi = pathInfo/this (preserved, not touched)
+	NAKED_FUN void Hook_InitTunnelPath()
+	{
+		__asm {
+			cmp  byte ptr [sCustomPortalFacingOverride], 0xFF
+			je   done
+			mov  al, byte ptr [sCustomPortalFacingOverride]
+			mov  byte ptr [esp+0x58], al
+		done:
+			jmp  dword ptr [sInitTunnelPathTrampolinePtr]
+		}
+	}
+
+	// Hook site: 0x0053FDEE — the 6-byte "call [edx+0xC4]" instruction inside MakeTunnelPaths.
+	// This is the first instruction after all direction-assignment branches have completed.
+	Patching::InlineHook sInitTunnelPathHook{
+		0x0053FDEE,
+		reinterpret_cast<void*>(&Hook_InitTunnelPath),
+		{ 0xFF, 0x92, 0xC4, 0x00, 0x00, 0x00 },
+		true
+	};
+
 	// Windows InsertTunnelPieces (0x006287d0) QueryInterfaces both occupants to
 	// kcSC4NetworkTunnelOccupant, then calls tunnel->GetPathInfo (+0xc4) and
 	// pathInfo->InitTunnelPath (+0x80) with the two tunnel-interface pointers.
-	void RefreshTunnelPathInfo(cIGZUnknown* self, cIGZUnknown* otherEnd)
+	//
+	// selfFacing: the portal's actual facing direction (0=N 1=E 2=S 3=W), used to set
+	// sCustomPortalFacingOverride so Hook_InitTunnelPath can substitute the correct axis
+	// instead of the coordinate-derived direction that MakeTunnelPaths computes internally.
+	void RefreshTunnelPathInfo(cIGZUnknown* self, cIGZUnknown* otherEnd, uint8_t selfFacing)
 	{
 		Logger& logger = Logger::GetInstance();
 
@@ -766,14 +824,25 @@ namespace
 
 		void** pathInfoVtable = *reinterpret_cast<void***>(pathInfo);
 		InitTunnelPathFn initTunnelPath = reinterpret_cast<InitTunnelPathFn>(pathInfoVtable[0x20]);
+
+		// Log the concrete function address on first call. Copy this value to sInitTunnelPathHook.address.
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: InitTunnelPath concrete address=%p selfFacing=%u.",
+			reinterpret_cast<void*>(initTunnelPath),
+			static_cast<uint32_t>(selfFacing));
+
+		sCustomPortalFacingOverride = selfFacing;
 		initTunnelPath(pathInfo, self, otherEnd);
+		sCustomPortalFacingOverride = 0xFF;
 
 		logger.WriteLineFormatted(
 			LogLevel::Trace,
-			"TunnelPortalTool: refreshed path info pathInfo=%p self=%p otherEnd=%p.",
+			"TunnelPortalTool: refreshed path info pathInfo=%p self=%p otherEnd=%p facing=%u.",
 			pathInfo,
 			self,
-			otherEnd);
+			otherEnd,
+			static_cast<uint32_t>(selfFacing));
 	}
 
 	void NotifyTrafficSimulatorForLinkedTunnels(
@@ -845,15 +914,16 @@ namespace
 		TraceCellInfoState("first before tunnel insertion", firstCell, first.networkType);
 		TraceCellInfoState("second before tunnel insertion", secondCell, second.networkType);
 
+		const uint8_t firstVectorDirection = InferTunnelPieceDirection(first, second);
+		const uint8_t secondVectorDirection = InferTunnelPieceDirection(second, first);
+		uint8_t firstDirection = firstVectorDirection;
+		uint8_t secondDirection = secondVectorDirection;
+
 		cISC4NetworkOccupant* firstOccupant = nullptr;
 		cISC4NetworkOccupant* secondOccupant = nullptr;
 		{
 			NetworkToolPlacementStateScope placementState(tool);
 			CustomTunnelInsertionScope customInsertion;
-			const uint8_t firstVectorDirection = InferTunnelPieceDirection(first, second);
-			const uint8_t secondVectorDirection = InferTunnelPieceDirection(second, first);
-			uint8_t firstDirection = firstVectorDirection;
-			uint8_t secondDirection = secondVectorDirection;
 			const bool inferredFirstDirection = TryInferTunnelPieceDirectionFromSurfaceApproach(
 				"first",
 				firstCell,
@@ -873,8 +943,8 @@ namespace
 				inferredSecondDirection ? "surface approach" : "vector",
 				static_cast<uint32_t>(firstVectorDirection),
 				static_cast<uint32_t>(secondVectorDirection));
-			PrepareTunnelEndpointCell("first", firstCell, first.networkType, firstDirection);
-			PrepareTunnelEndpointCell("second", secondCell, second.networkType, secondDirection);
+			PrepareTunnelEndpointCell("first", firstCell, first.networkType, firstDirection, firstVectorDirection);
+			PrepareTunnelEndpointCell("second", secondCell, second.networkType, secondDirection, secondVectorDirection);
 			TraceCellInfoState("first prepared for tunnel insertion", firstCell, first.networkType);
 			TraceCellInfoState("second prepared for tunnel insertion", secondCell, second.networkType);
 			firstOccupant = InsertTunnelPiece(tool, firstDirection, 0, firstCell);
@@ -927,8 +997,8 @@ namespace
 		SetOtherEndOccupant(firstTunnel, secondOccupant);
 		SetOtherEndOccupant(secondTunnel, firstOccupant);
 
-		RefreshTunnelPathInfo(firstTunnel, secondTunnel);
-		RefreshTunnelPathInfo(secondTunnel, firstTunnel);
+		RefreshTunnelPathInfo(firstTunnel, secondTunnel, firstDirection);
+		RefreshTunnelPathInfo(secondTunnel, firstTunnel, secondDirection);
 		MarkNetworkOccupantUsable(firstOccupant, "first");
 		MarkNetworkOccupantUsable(secondOccupant, "second");
 		TraceNetworkOccupantState("first after mark usable", firstOccupant);
@@ -1194,4 +1264,6 @@ bool TunnelPortalTool::Activate(cISC4View3DWin* view3D)
 void TunnelPortalTool::InstallDiagnostics()
 {
 	Patching::InstallInlineHook(sInsertTunnelPieceHook);
+	Patching::InstallInlineHook(sInitTunnelPathHook);
+	sInitTunnelPathTrampolinePtr = sInitTunnelPathHook.trampoline;
 }
