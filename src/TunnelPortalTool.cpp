@@ -1501,15 +1501,11 @@ namespace
 
 		const uint8_t firstPathDirection = TunnelPieceDirectionToPathDirection(firstDirection);
 		const uint8_t secondPathDirection = TunnelPieceDirectionToPathDirection(secondDirection);
-		uint8_t firstPeerLookupPathDirection = secondPathDirection;
-		uint8_t secondPeerLookupPathDirection = firstPathDirection;
-		ChooseTunnelLanePairing(
-			firstPathInfo,
-			secondPathInfo,
-			firstPathDirection,
-			secondPathDirection,
-			firstPeerLookupPathDirection,
-			secondPeerLookupPathDirection);
+		// The peer lookup direction is always the opposite of the other portal's exit direction.
+		// EXIT path direction = selfPathDirection; ENTRY path direction = selfPathDirection ^ 2.
+		// MakeTunnelPaths(self=A) must connect A's exit to B's entry, so peer lookup = secondPathDirection ^ 2.
+		const uint8_t firstPeerLookupPathDirection = secondPathDirection ^ 2;
+		const uint8_t secondPeerLookupPathDirection = firstPathDirection ^ 2;
 
 		RefreshTunnelPathInfo(firstTunnel, secondTunnel, firstDirection, secondDirection, firstPeerLookupPathDirection);
 		RefreshTunnelPathInfo(secondTunnel, firstTunnel, secondDirection, firstDirection, secondPeerLookupPathDirection);
