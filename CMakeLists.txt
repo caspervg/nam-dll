@@ -35,6 +35,7 @@ set(NAM_SOURCES
     src/Settings.cpp
     src/TransitAccess.cpp
     src/TunnelPortalTool.cpp
+    src/TunnelPortalToolViewInputControl.cpp
     src/version.rc
 )
 

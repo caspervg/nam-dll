@@ -4,6 +4,7 @@ class cISC4View3DWin;
 
 namespace TunnelPortalTool
 {
-	void InstallDiagnostics();
+	void Install();
+	void RefreshCity();
 	bool Activate(cISC4View3DWin* view3D);
 }
