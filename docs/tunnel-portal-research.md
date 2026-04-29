@@ -822,3 +822,47 @@ TunnelPortalTool: rewrote pathfinder tunnel AddTripNode edge current=(...)
 If this fires but mixed-axis commute still fails, the next target is the
 analogous direction preservation in `FloodSubnetwork` (`0x00722E18` is the
 Windows call to the tunnel hash-map lookup inside that routine).
+
+### 2026-04-29 two-tile network portal shape
+
+Single-tile custom portals now commute after the pathfinder/FloodSubnetwork
+edge rewrite is limited to mixed-axis pairs and uses the peer portal mouth side.
+
+Two-tile networks exposed an earlier placement mismatch. Native
+`InsertTunnelPieces` does not create one portal occupant per endpoint. It walks
+the start-side cell range, calls `InsertTunnelPiece(direction, sequenceIndex,
+cell)` for each tile while incrementing `sequenceIndex`, then walks the
+opposite endpoint range and links each corresponding pair. For road/street this
+range has one cell. For Avenue/Highway/GroundHighway it can have two parallel
+cells.
+
+The custom tool now mirrors that shape for likely two-tile networks:
+
+- resolve the clicked tile plus an adjacent same-structure tile perpendicular
+  to the portal facing axis;
+- sort the pair by cross-axis coordinate and assign sequence indices `0,1`;
+- insert both first-side and second-side portal tiles;
+- link, refresh path info, register tunnel edge rewrites, mark usable, and
+  notify the traffic simulator per matched tile pair.
+
+This is intentionally still conservative: if a two-tile endpoint does not
+resolve an adjacent same-structure tile, the tool logs that and falls back to
+the one-tile path rather than inventing an unrelated neighbor.
+
+A native Avenue trace clarified two details:
+
+- east-facing endpoint sequence order was `(26,109) seq=0`,
+  `(26,110) seq=1`, while the west-facing endpoint reversed the cross-axis
+  order: `(44,110) seq=0`, `(44,109) seq=1`;
+- the physical lower/upper Avenue lanes used distinct edge masks:
+  `0x04020002` and `0x00020402`.
+
+The custom sequence ordering now follows the native direction-dependent
+ordering, and two-tile cell preparation uses the lane-specific edge masks
+instead of the single-tile all-axis mask.
+
+Lane linking still needs more research. The current code intentionally uses the
+simple equal-sequence pairing again because that was the version where Avenue
+portal occupants were visible and correctly shaped. Later physical-lane and
+geometry-scored pairing experiments changed the crossing behavior but did not
+produce usable Avenue tunnel traffic.

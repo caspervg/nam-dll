@@ -41,6 +41,8 @@ namespace
 	constexpr uint32_t kTunnelCellNetworkFlag = 0x00080000;
 	constexpr uint32_t kNorthSouthPortalEdges = 0x02000200;
 	constexpr uint32_t kEastWestPortalEdges = 0x00020002;
+	constexpr uint32_t kTwoTilePortalEdgesLane0 = 0x04020002;
+	constexpr uint32_t kTwoTilePortalEdgesLane1 = 0x00020402;
 	constexpr std::array<uint32_t, 4> kSurfaceApproachEdgeForTunnelDirection = {
 		0x02000000, // tunnel faces north, surface approach is south
 		0x00000002, // tunnel faces east, surface approach is west
@@ -90,6 +92,15 @@ namespace
 		cISC4NetworkOccupant::eNetworkType networkType = cISC4NetworkOccupant::Road;
 	};
 
+	struct PortalCell
+	{
+		Endpoint endpoint;
+		cSC4NetworkCellInfo* cellInfo = nullptr;
+		uint8_t sequenceIndex = 0;
+		cISC4NetworkOccupant* occupant = nullptr;
+		cRZAutoRefCount<cIGZUnknown> tunnel;
+	};
+
 	template <typename T>
 	T& FieldAt(void* object, size_t offset)
 	{
@@ -101,6 +112,13 @@ namespace
 	{
 		return *reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(object) + offset);
 	}
+
+	bool IsTwoTileNetwork(cISC4NetworkOccupant::eNetworkType networkType);
+	int32_t CrossAxisCoordinate(const Endpoint& endpoint, uint8_t tunnelPieceDirection);
+	bool IsSameNetworkStructure(cSC4NetworkCellInfo* first, cSC4NetworkCellInfo* second);
+	bool UseAscendingTwoTileSequence(uint8_t tunnelPieceDirection);
+	uint8_t TwoTilePhysicalLaneIndex(uint8_t tunnelPieceDirection, uint8_t sequenceIndex);
+	bool IsCompatiblePortalCompanionCell(cSC4NetworkCellInfo* first, cSC4NetworkCellInfo* second);
 
 	class NetworkToolPlacementStateScope
 	{
@@ -214,6 +232,105 @@ namespace
 		return cellInfo;
 	}
 
+	size_t BuildPortalCellList(
+		cSC4NetworkTool* tool,
+		const char* label,
+		const Endpoint& endpoint,
+		cSC4NetworkCellInfo* primaryCell,
+		uint8_t tunnelPieceDirection,
+		std::array<PortalCell, 2>& cells)
+	{
+		cells[0] = {};
+		cells[1] = {};
+		cells[0].endpoint = endpoint;
+		cells[0].cellInfo = primaryCell;
+
+		size_t count = 1;
+		if (!IsTwoTileNetwork(endpoint.networkType) || !primaryCell)
+		{
+			cells[0].sequenceIndex = 0;
+			return count;
+		}
+
+		Logger& logger = Logger::GetInstance();
+		const int32_t offsets[2] = { -1, 1 };
+		for (const int32_t offset : offsets)
+		{
+			Endpoint candidate = endpoint;
+			if ((tunnelPieceDirection & 1) != 0)
+			{
+				const int32_t z = static_cast<int32_t>(endpoint.z) + offset;
+				if (z < 0)
+				{
+					continue;
+				}
+				candidate.z = static_cast<uint32_t>(z);
+			}
+			else
+			{
+				const int32_t x = static_cast<int32_t>(endpoint.x) + offset;
+				if (x < 0)
+				{
+					continue;
+				}
+				candidate.x = static_cast<uint32_t>(x);
+			}
+
+			cSC4NetworkCellInfo* const candidateCell = GetEndpointCell(tool, candidate);
+			if (IsCompatiblePortalCompanionCell(primaryCell, candidateCell))
+			{
+				cells[1].endpoint = candidate;
+				cells[1].cellInfo = candidateCell;
+				count = 2;
+				break;
+			}
+		}
+
+		if (count == 2)
+		{
+			const bool ascending = UseAscendingTwoTileSequence(tunnelPieceDirection);
+			const int32_t firstCrossAxis = CrossAxisCoordinate(cells[0].endpoint, tunnelPieceDirection);
+			const int32_t secondCrossAxis = CrossAxisCoordinate(cells[1].endpoint, tunnelPieceDirection);
+			if ((ascending && secondCrossAxis < firstCrossAxis)
+				|| (!ascending && firstCrossAxis < secondCrossAxis))
+			{
+				std::swap(cells[0], cells[1]);
+			}
+		}
+
+		for (size_t i = 0; i < count; ++i)
+		{
+			cells[i].sequenceIndex = static_cast<uint8_t>(i);
+		}
+
+		logger.WriteLineFormatted(
+			LogLevel::Trace,
+			"TunnelPortalTool: %s portal cell list count=%u primary=(%u,%u) cell0=(%u,%u) seq0=%u cell1=(%u,%u) seq1=%u.",
+			label,
+			static_cast<uint32_t>(count),
+			endpoint.x,
+			endpoint.z,
+			cells[0].endpoint.x,
+			cells[0].endpoint.z,
+			static_cast<uint32_t>(cells[0].sequenceIndex),
+			count > 1 ? cells[1].endpoint.x : 0,
+			count > 1 ? cells[1].endpoint.z : 0,
+			count > 1 ? static_cast<uint32_t>(cells[1].sequenceIndex) : 0);
+
+		if (count == 1)
+		{
+			logger.WriteLineFormatted(
+				LogLevel::Debug,
+				"TunnelPortalTool: %s %s endpoint at (%u,%u) did not find an adjacent same-structure tile for two-tile portal placement.",
+				label,
+				NetworkTypeName(endpoint.networkType),
+				endpoint.x,
+				endpoint.z);
+		}
+
+		return count;
+	}
+
 	bool TryFindNetworkAtTile(
 		uint32_t x,
 		uint32_t z,
@@ -279,6 +396,71 @@ namespace
 		return (tunnelPieceDirection & 1) != 0
 			? kEastWestPortalEdges
 			: kNorthSouthPortalEdges;
+	}
+
+	bool IsTwoTileNetwork(cISC4NetworkOccupant::eNetworkType networkType)
+	{
+		switch (networkType)
+		{
+		case cISC4NetworkOccupant::Avenue:
+		case cISC4NetworkOccupant::Highway:
+		case cISC4NetworkOccupant::GroundHighway:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool UseAscendingTwoTileSequence(uint8_t tunnelPieceDirection)
+	{
+		// Native Avenue traces show east-facing portals use ascending cross-axis
+		// order while west-facing portals use descending order. The same rule is
+		// expected for south/north on the perpendicular axis.
+		return tunnelPieceDirection == 1 || tunnelPieceDirection == 2;
+	}
+
+	uint8_t TwoTilePhysicalLaneIndex(uint8_t tunnelPieceDirection, uint8_t sequenceIndex)
+	{
+		return UseAscendingTwoTileSequence(tunnelPieceDirection)
+			? sequenceIndex
+			: static_cast<uint8_t>(1 - sequenceIndex);
+	}
+
+	int32_t CrossAxisCoordinate(const Endpoint& endpoint, uint8_t tunnelPieceDirection)
+	{
+		return (tunnelPieceDirection & 1) != 0
+			? static_cast<int32_t>(endpoint.z)
+			: static_cast<int32_t>(endpoint.x);
+	}
+
+	bool IsSameNetworkStructure(
+		cSC4NetworkCellInfo* first,
+		cSC4NetworkCellInfo* second)
+	{
+		if (!first || !second || !first->networkOccupant || !second->networkOccupant)
+		{
+			return false;
+		}
+
+		return first->networkOccupant == second->networkOccupant
+			|| first->networkOccupant->IsPartOfTheSameStructure(second->networkOccupant);
+	}
+
+	bool IsCompatiblePortalCompanionCell(
+		cSC4NetworkCellInfo* first,
+		cSC4NetworkCellInfo* second)
+	{
+		if (!first || !second)
+		{
+			return false;
+		}
+
+		if (first->networkTypeFlags != second->networkTypeFlags)
+		{
+			return false;
+		}
+
+		return true;
 	}
 
 	uint8_t TunnelPieceDirectionToPathDirection(uint8_t tunnelPieceDirection)
@@ -1340,7 +1522,8 @@ namespace
 		cSC4NetworkCellInfo* cellInfo,
 		cISC4NetworkOccupant::eNetworkType networkType,
 		uint8_t tunnelPieceDirection,
-		uint8_t pathStitchDirection)
+		uint8_t pathStitchDirection,
+		uint8_t sequenceIndex = 0)
 	{
 		if (!cellInfo)
 		{
@@ -1350,25 +1533,31 @@ namespace
 		const uint32_t oldNetworkFlags = cellInfo->networkTypeFlags;
 		const uint32_t oldCombinedEdges = cellInfo->edgeFlagsCombined;
 		const uint32_t oldNetworkEdges = cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)];
-		// MakeTunnelPaths computes ONE cardinal direction from cell coordinates and filters
-		// path entries by it. For mixed-axis portals the coordinate direction may differ from
-		// the portal's facing, so whichever axis native stitching picks it must find entries on
-		// both sides. Providing all four direction flags ensures entries for every possible
-		// computed direction exist on both portals, making bidirectional stitching work regardless
-		// of axis alignment.
-		const uint32_t preparedEdges = kNorthSouthPortalEdges | kEastWestPortalEdges;
+		uint32_t preparedEdges = kNorthSouthPortalEdges | kEastWestPortalEdges;
+		if (IsTwoTileNetwork(networkType))
+		{
+			// Native Avenue tunnel endpoints use lane-specific edge masks:
+			// lower cross-axis lane = 0x04020002, upper cross-axis lane =
+			// 0x00020402. Sequence order reverses on west/north-facing portals,
+			// so edge mask selection must account for the facing direction.
+			const uint8_t physicalLaneIndex = TwoTilePhysicalLaneIndex(tunnelPieceDirection, sequenceIndex);
+			preparedEdges = physicalLaneIndex == 0
+				? kTwoTilePortalEdgesLane0
+				: kTwoTilePortalEdgesLane1;
+		}
 
 		cellInfo->networkTypeFlags |= kTunnelCellNetworkFlag;
-		cellInfo->edgeFlagsCombined |= preparedEdges;
-		cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)] |= preparedEdges;
+		cellInfo->edgeFlagsCombined = preparedEdges;
+		cellInfo->edgesPerNetwork[static_cast<uint32_t>(networkType)] = preparedEdges;
 		FieldAt<uint8_t>(cellInfo, 0x51) = 1;
 		FieldAt<uint8_t>(cellInfo, 0x53) = 1;
 
 		Logger::GetInstance().WriteLineFormatted(
 			LogLevel::Trace,
-			"TunnelPortalTool: prepared %s tunnel endpoint cell direction=%u flags 0x%08X->0x%08X edges 0x%08X/0x%08X->0x%08X/0x%08X.",
+			"TunnelPortalTool: prepared %s tunnel endpoint cell direction=%u sequence=%u flags 0x%08X->0x%08X edges 0x%08X/0x%08X->0x%08X/0x%08X.",
 			label,
 			static_cast<uint32_t>(tunnelPieceDirection),
+			static_cast<uint32_t>(sequenceIndex),
 			oldNetworkFlags,
 			cellInfo->networkTypeFlags,
 			oldCombinedEdges,
@@ -2200,9 +2389,10 @@ namespace
 		const uint8_t secondVectorDirection = InferTunnelPieceDirection(second, first);
 		uint8_t firstDirection = firstVectorDirection;
 		uint8_t secondDirection = secondVectorDirection;
+		std::array<PortalCell, 2> firstPortalCells{};
+		std::array<PortalCell, 2> secondPortalCells{};
+		size_t portalCellCount = 1;
 
-		cISC4NetworkOccupant* firstOccupant = nullptr;
-		cISC4NetworkOccupant* secondOccupant = nullptr;
 		{
 			NetworkToolPlacementStateScope placementState(tool);
 			CustomTunnelInsertionScope customInsertion;
@@ -2225,103 +2415,194 @@ namespace
 				inferredSecondDirection ? "surface approach" : "vector",
 				static_cast<uint32_t>(firstVectorDirection),
 				static_cast<uint32_t>(secondVectorDirection));
-			PrepareTunnelEndpointCell("first", firstCell, first.networkType, firstDirection, firstVectorDirection);
-			PrepareTunnelEndpointCell("second", secondCell, second.networkType, secondDirection, secondVectorDirection);
-			TraceCellInfoState("first prepared for tunnel insertion", firstCell, first.networkType);
-			TraceCellInfoState("second prepared for tunnel insertion", secondCell, second.networkType);
-			firstOccupant = InsertTunnelPiece(tool, firstDirection, 0, firstCell);
-			secondOccupant = InsertTunnelPiece(tool, secondDirection, 0, secondCell);
+
+			const size_t firstPortalCellCount = BuildPortalCellList(
+				tool,
+				"first",
+				first,
+				firstCell,
+				firstDirection,
+				firstPortalCells);
+			const size_t secondPortalCellCount = BuildPortalCellList(
+				tool,
+				"second",
+				second,
+				secondCell,
+				secondDirection,
+				secondPortalCells);
+
+			if (firstPortalCellCount != secondPortalCellCount)
+			{
+				logger.WriteLineFormatted(
+					LogLevel::Error,
+					"TunnelPortalTool: portal endpoints resolved different tile counts, first=%u second=%u.",
+					static_cast<uint32_t>(firstPortalCellCount),
+					static_cast<uint32_t>(secondPortalCellCount));
+				return false;
+			}
+			portalCellCount = firstPortalCellCount;
+
+			for (size_t i = 0; i < portalCellCount; ++i)
+			{
+				PrepareTunnelEndpointCell(
+					"first",
+					firstPortalCells[i].cellInfo,
+					first.networkType,
+					firstDirection,
+					firstVectorDirection,
+					firstPortalCells[i].sequenceIndex);
+				PrepareTunnelEndpointCell(
+					"second",
+					secondPortalCells[i].cellInfo,
+					second.networkType,
+					secondDirection,
+					secondVectorDirection,
+					secondPortalCells[i].sequenceIndex);
+				TraceCellInfoState("first prepared for tunnel insertion", firstPortalCells[i].cellInfo, first.networkType);
+				TraceCellInfoState("second prepared for tunnel insertion", secondPortalCells[i].cellInfo, second.networkType);
+				firstPortalCells[i].occupant = InsertTunnelPiece(
+					tool,
+					firstDirection,
+					firstPortalCells[i].sequenceIndex,
+					firstPortalCells[i].cellInfo);
+				secondPortalCells[i].occupant = InsertTunnelPiece(
+					tool,
+					secondDirection,
+					secondPortalCells[i].sequenceIndex,
+					secondPortalCells[i].cellInfo);
+			}
 		}
 
-		if (!firstOccupant || !secondOccupant)
+		for (size_t i = 0; i < portalCellCount; ++i)
 		{
-			logger.WriteLine(LogLevel::Error, "Tunnel portal placement did not create two tunnel occupants.");
-			return false;
+			if (!firstPortalCells[i].occupant || !secondPortalCells[i].occupant)
+			{
+				logger.WriteLineFormatted(
+					LogLevel::Error,
+					"Tunnel portal placement did not create two tunnel occupants for lane %u.",
+					static_cast<uint32_t>(i));
+				return false;
+			}
 		}
 
 		logger.WriteLineFormatted(
 			LogLevel::Trace,
-			"TunnelPortalTool: InsertTunnelPiece returned first=%p second=%p.",
-			firstOccupant,
-			secondOccupant);
-		TraceCellInfoState("first after tunnel insertion", firstCell, first.networkType);
-		TraceCellInfoState("second after tunnel insertion", secondCell, second.networkType);
-		TraceNetworkOccupantState("first after tunnel insertion", firstOccupant);
-		TraceNetworkOccupantState("second after tunnel insertion", secondOccupant);
-		logger.WriteLineFormatted(
-			LogLevel::Trace,
-			"TunnelPortalTool: occupant manager insert flags first=%u second=%u.",
-			static_cast<uint32_t>(FieldAt<uint8_t>(firstCell, kCellInfoInsertResultOffset) != 0),
-			static_cast<uint32_t>(FieldAt<uint8_t>(secondCell, kCellInfoInsertResultOffset) != 0));
+			"TunnelPortalTool: InsertTunnelPiece returned portalCellCount=%u first0=%p second0=%p first1=%p second1=%p.",
+			static_cast<uint32_t>(portalCellCount),
+			firstPortalCells[0].occupant,
+			secondPortalCells[0].occupant,
+			portalCellCount > 1 ? firstPortalCells[1].occupant : nullptr,
+			portalCellCount > 1 ? secondPortalCells[1].occupant : nullptr);
 
-		cRZAutoRefCount<cIGZUnknown> firstTunnel;
-		cRZAutoRefCount<cIGZUnknown> secondTunnel;
-		if (!QueryTunnelOccupant(firstOccupant, firstTunnel) || !QueryTunnelOccupant(secondOccupant, secondTunnel))
+		for (size_t i = 0; i < portalCellCount; ++i)
 		{
+			TraceCellInfoState("first after tunnel insertion", firstPortalCells[i].cellInfo, first.networkType);
+			TraceCellInfoState("second after tunnel insertion", secondPortalCells[i].cellInfo, second.networkType);
+			TraceNetworkOccupantState("first after tunnel insertion", firstPortalCells[i].occupant);
+			TraceNetworkOccupantState("second after tunnel insertion", secondPortalCells[i].occupant);
 			logger.WriteLineFormatted(
-				LogLevel::Error,
-				"TunnelPortalTool: created occupants are not tunnel occupants, first=%p second=%p firstTunnel=%p secondTunnel=%p.",
-				firstOccupant,
-				secondOccupant,
-				static_cast<cIGZUnknown*>(firstTunnel),
-				static_cast<cIGZUnknown*>(secondTunnel));
-			return false;
+				LogLevel::Trace,
+				"TunnelPortalTool: occupant manager insert flags lane=%u first=%u second=%u.",
+				static_cast<uint32_t>(i),
+				static_cast<uint32_t>(FieldAt<uint8_t>(firstPortalCells[i].cellInfo, kCellInfoInsertResultOffset) != 0),
+				static_cast<uint32_t>(FieldAt<uint8_t>(secondPortalCells[i].cellInfo, kCellInfoInsertResultOffset) != 0));
+
+			if (!QueryTunnelOccupant(firstPortalCells[i].occupant, firstPortalCells[i].tunnel)
+				|| !QueryTunnelOccupant(secondPortalCells[i].occupant, secondPortalCells[i].tunnel))
+			{
+				logger.WriteLineFormatted(
+					LogLevel::Error,
+					"TunnelPortalTool: created occupants are not tunnel occupants for lane %u, first=%p second=%p firstTunnel=%p secondTunnel=%p.",
+					static_cast<uint32_t>(i),
+					firstPortalCells[i].occupant,
+					secondPortalCells[i].occupant,
+					static_cast<cIGZUnknown*>(firstPortalCells[i].tunnel),
+					static_cast<cIGZUnknown*>(secondPortalCells[i].tunnel));
+				return false;
+			}
 		}
 
-		logger.WriteLineFormatted(
-			LogLevel::Trace,
-			"TunnelPortalTool: tunnel interfaces first=%p second=%p.",
-			static_cast<cIGZUnknown*>(firstTunnel),
-			static_cast<cIGZUnknown*>(secondTunnel));
-
-		SetOtherEndOccupant(firstTunnel, secondOccupant);
-		SetOtherEndOccupant(secondTunnel, firstOccupant);
-
-		void* firstPathInfo = nullptr;
-		void* secondPathInfo = nullptr;
+		for (size_t i = 0; i < portalCellCount; ++i)
 		{
-			void** firstTunnelVtable = *reinterpret_cast<void***>(static_cast<cIGZUnknown*>(firstTunnel));
-			void** secondTunnelVtable = *reinterpret_cast<void***>(static_cast<cIGZUnknown*>(secondTunnel));
-			firstPathInfo = reinterpret_cast<GetPathInfoFn>(firstTunnelVtable[0x31])(firstTunnel);
-			secondPathInfo = reinterpret_cast<GetPathInfoFn>(secondTunnelVtable[0x31])(secondTunnel);
+			PortalCell& firstPortalCell = firstPortalCells[i];
+			PortalCell& secondPortalCell = secondPortalCells[i];
+
+			logger.WriteLineFormatted(
+				LogLevel::Trace,
+				"TunnelPortalTool: tunnel interfaces lane=%u first=%p second=%p firstSeq=%u secondSeq=%u.",
+				static_cast<uint32_t>(i),
+				static_cast<cIGZUnknown*>(firstPortalCell.tunnel),
+				static_cast<cIGZUnknown*>(secondPortalCell.tunnel),
+				static_cast<uint32_t>(firstPortalCell.sequenceIndex),
+				static_cast<uint32_t>(secondPortalCell.sequenceIndex));
+
+			SetOtherEndOccupant(firstPortalCell.tunnel, secondPortalCell.occupant);
+			SetOtherEndOccupant(secondPortalCell.tunnel, firstPortalCell.occupant);
+
+			void* firstPathInfo = nullptr;
+			void* secondPathInfo = nullptr;
+			{
+				void** firstTunnelVtable = *reinterpret_cast<void***>(static_cast<cIGZUnknown*>(firstPortalCell.tunnel));
+				void** secondTunnelVtable = *reinterpret_cast<void***>(static_cast<cIGZUnknown*>(secondPortalCell.tunnel));
+				firstPathInfo = reinterpret_cast<GetPathInfoFn>(firstTunnelVtable[0x31])(firstPortalCell.tunnel);
+				secondPathInfo = reinterpret_cast<GetPathInfoFn>(secondTunnelVtable[0x31])(secondPortalCell.tunnel);
+			}
+
+			const RawPathMapNode* const firstOutgoingPath = FindPathWithMouthPoint(firstPathInfo, firstDirection, true);
+			const RawPathMapNode* const secondIncomingPath = FindPathWithMouthPoint(secondPathInfo, secondDirection, false);
+			const RawPathMapNode* const secondOutgoingPath = FindPathWithMouthPoint(secondPathInfo, secondDirection, true);
+			const RawPathMapNode* const firstIncomingPath = FindPathWithMouthPoint(firstPathInfo, firstDirection, false);
+			const uint8_t firstOutPathDirection = firstOutgoingPath ? static_cast<uint8_t>(firstOutgoingPath->key) : TunnelPieceDirectionToPathDirection(firstDirection);
+			const uint16_t secondInPathKeyLowWord = secondIncomingPath ? static_cast<uint16_t>(secondIncomingPath->key) : TunnelPathKeyLowWord(TunnelPieceDirectionToPathDirection(secondDirection));
+			const uint8_t secondOutPathDirection = secondOutgoingPath ? static_cast<uint8_t>(secondOutgoingPath->key) : TunnelPieceDirectionToPathDirection(secondDirection);
+			const uint16_t firstInPathKeyLowWord = firstIncomingPath ? static_cast<uint16_t>(firstIncomingPath->key) : TunnelPathKeyLowWord(TunnelPieceDirectionToPathDirection(firstDirection));
+			logger.WriteLineFormatted(
+				LogLevel::Trace,
+				"TunnelPortalTool: directed tunnel path pairing lane=%u firstOutKey=0x%08X secondInKey=0x%08X secondOutKey=0x%08X firstInKey=0x%08X.",
+				static_cast<uint32_t>(i),
+				firstOutgoingPath ? firstOutgoingPath->key : 0,
+				secondIncomingPath ? secondIncomingPath->key : 0,
+				secondOutgoingPath ? secondOutgoingPath->key : 0,
+				firstIncomingPath ? firstIncomingPath->key : 0);
+			logger.WriteLineFormatted(
+				LogLevel::Trace,
+				"TunnelPortalTool: directed tunnel path directions lane=%u firstOut=%u secondInLowWord=0x%04X secondOut=%u firstInLowWord=0x%04X.",
+				static_cast<uint32_t>(i),
+				static_cast<uint32_t>(firstOutPathDirection),
+				static_cast<uint32_t>(secondInPathKeyLowWord),
+				static_cast<uint32_t>(secondOutPathDirection),
+				static_cast<uint32_t>(firstInPathKeyLowWord));
+
+			RegisterCustomTunnelRouteEdgeFix(
+				firstPortalCell.endpoint,
+				secondPortalCell.endpoint,
+				TunnelPieceDirectionToPathDirection(firstDirection),
+				TunnelPieceDirectionToPathDirection(secondDirection),
+				(firstDirection & 1) != (secondDirection & 1));
+			RefreshTunnelPathInfo(
+				firstPortalCell.tunnel,
+				secondPortalCell.tunnel,
+				firstDirection,
+				secondDirection,
+				firstOutPathDirection,
+				secondInPathKeyLowWord);
+			RefreshTunnelPathInfo(
+				secondPortalCell.tunnel,
+				firstPortalCell.tunnel,
+				secondDirection,
+				firstDirection,
+				secondOutPathDirection,
+				firstInPathKeyLowWord);
+			MarkNetworkOccupantUsable(firstPortalCell.occupant, "first");
+			MarkNetworkOccupantUsable(secondPortalCell.occupant, "second");
+			TraceNetworkOccupantState("first after mark usable", firstPortalCell.occupant);
+			TraceNetworkOccupantState("second after mark usable", secondPortalCell.occupant);
+			NotifyTrafficSimulatorForLinkedTunnels(
+				firstPortalCell.endpoint,
+				secondPortalCell.endpoint,
+				firstPortalCell.tunnel,
+				secondPortalCell.tunnel);
 		}
-
-		const RawPathMapNode* const firstOutgoingPath = FindPathWithMouthPoint(firstPathInfo, firstDirection, true);
-		const RawPathMapNode* const secondIncomingPath = FindPathWithMouthPoint(secondPathInfo, secondDirection, false);
-		const RawPathMapNode* const secondOutgoingPath = FindPathWithMouthPoint(secondPathInfo, secondDirection, true);
-		const RawPathMapNode* const firstIncomingPath = FindPathWithMouthPoint(firstPathInfo, firstDirection, false);
-		const uint8_t firstOutPathDirection = firstOutgoingPath ? static_cast<uint8_t>(firstOutgoingPath->key) : TunnelPieceDirectionToPathDirection(firstDirection);
-		const uint16_t secondInPathKeyLowWord = secondIncomingPath ? static_cast<uint16_t>(secondIncomingPath->key) : TunnelPathKeyLowWord(TunnelPieceDirectionToPathDirection(secondDirection));
-		const uint8_t secondOutPathDirection = secondOutgoingPath ? static_cast<uint8_t>(secondOutgoingPath->key) : TunnelPieceDirectionToPathDirection(secondDirection);
-		const uint16_t firstInPathKeyLowWord = firstIncomingPath ? static_cast<uint16_t>(firstIncomingPath->key) : TunnelPathKeyLowWord(TunnelPieceDirectionToPathDirection(firstDirection));
-		logger.WriteLineFormatted(
-			LogLevel::Trace,
-			"TunnelPortalTool: directed tunnel path pairing firstOutKey=0x%08X secondInKey=0x%08X secondOutKey=0x%08X firstInKey=0x%08X.",
-			firstOutgoingPath ? firstOutgoingPath->key : 0,
-			secondIncomingPath ? secondIncomingPath->key : 0,
-			secondOutgoingPath ? secondOutgoingPath->key : 0,
-			firstIncomingPath ? firstIncomingPath->key : 0);
-		logger.WriteLineFormatted(
-			LogLevel::Trace,
-			"TunnelPortalTool: directed tunnel path directions firstOut=%u secondInLowWord=0x%04X secondOut=%u firstInLowWord=0x%04X.",
-			static_cast<uint32_t>(firstOutPathDirection),
-			static_cast<uint32_t>(secondInPathKeyLowWord),
-			static_cast<uint32_t>(secondOutPathDirection),
-			static_cast<uint32_t>(firstInPathKeyLowWord));
-
-		RegisterCustomTunnelRouteEdgeFix(
-			first,
-			second,
-			TunnelPieceDirectionToPathDirection(firstDirection),
-			TunnelPieceDirectionToPathDirection(secondDirection),
-			(firstDirection & 1) != (secondDirection & 1));
-		RefreshTunnelPathInfo(firstTunnel, secondTunnel, firstDirection, secondDirection, firstOutPathDirection, secondInPathKeyLowWord);
-		RefreshTunnelPathInfo(secondTunnel, firstTunnel, secondDirection, firstDirection, secondOutPathDirection, firstInPathKeyLowWord);
-		MarkNetworkOccupantUsable(firstOccupant, "first");
-		MarkNetworkOccupantUsable(secondOccupant, "second");
-		TraceNetworkOccupantState("first after mark usable", firstOccupant);
-		TraceNetworkOccupantState("second after mark usable", secondOccupant);
-		NotifyTrafficSimulatorForLinkedTunnels(first, second, firstTunnel, secondTunnel);
 		logger.WriteLine(
 			LogLevel::Trace,
 			"TunnelPortalTool: skipped synthetic occupant-added messages; traffic simulator was notified after tunnel linking.");
