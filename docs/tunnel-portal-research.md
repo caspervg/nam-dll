@@ -602,33 +602,223 @@ peer key, and the peer's opposite key. This tests whether the peer rewrite found
 the wrong end of the peer portal path.
 
 The point trace showed the stitched path really extends from one custom endpoint
-to the other. A brief experiment changed the peer lookup to the peer's opposite
-lane key, e.g. south-facing peer `0x01000301` instead of `0x01000103`. That
-worked better for same-axis pairs such as NS/SN or EW/WE, but made mixed NS/EW
-paths visibly cross each other.
+to the other, but the previous lane-pairing attempts only changed the peer
+lookup key. That is insufficient. A road tunnel has two reciprocal local path
+keys:
 
-The prototype now chooses the peer lookup lane by portal axis:
+- one path goes into the portal;
+- one path goes out of the portal.
 
-- same axis: use the opposite peer lane key;
-- mixed axis: use the same-facing peer lane key.
+The logical stitching has to connect outgoing -> incoming, then do the reverse
+direction separately:
 
-That still is not general enough. The mapping depends on the individual portal
-orientations, not just whether their axes match. The current algorithm now
-scores lane pairings from actual path geometry:
+- first outgoing path -> second incoming path;
+- second outgoing path -> first incoming path.
 
-1. For each portal, get the self path key for its facing path direction.
-2. Try all four peer-lane pairings:
-   - first -> second facing lane / second -> first facing lane
-   - first -> second facing lane / second -> first opposite lane
-   - first -> second opposite lane / second -> first facing lane
-   - first -> second opposite lane / second -> first opposite lane
-3. Build the two tunnel connector segments using the same endpoints native
-   `MakeTunnelPaths` uses: self path last point to peer path first point.
-4. Penalize pairings whose two connector segments cross in X/Z.
-5. Choose the lowest score, with distance as the tie-breaker.
+The simple `d`/`d ^ 2` interpretation was still wrong for some orientations:
+it connected to the surface entrance side. The current prototype chooses the
+keys geometrically from the actual path point endpoints:
+
+- self outgoing key: path whose last point is farthest toward the self tunnel
+  mouth, using the tunnel-piece facing direction;
+- peer incoming key: path whose first point is farthest toward the peer tunnel
+  mouth.
+
+`Hook_InitTunnelPath` overrides the local direction filter to the low byte of
+the chosen self key. `Hook_PeerPathLookupKey` rewrites the peer lookup low word
+to the chosen peer key's low word. This preserves the observed path-key lanes
+instead of assuming a fixed mapping from facing direction to in/out.
 
 The next cheap traffic-simulator test is to call
 `DoTunnelChanged(..., false)` for both endpoints after linking, then
 `DoTunnelChanged(..., true)` for both endpoints. This clears any stale tunnel
 metadata that may have been created by occupant-manager notifications before
 the two custom tunnel endpoints were linked.
+
+The current diagnostic pass scans the traffic simulator tunnel-record hash map
+at `trafficSimulator + 0xc8` before/after the remove/add calls and after the
+connection rebuilds. Windows evidence:
+
+- remove helper `0x00710910` uses table fields at `map + 4`, `map + 8`, and
+  node key at `node + 4`;
+- add/get helper `0x00713d60` uses the same table and returns the value at
+  `node + 8`.
+
+This should show whether `DoTunnelChanged(true)` creates records for either
+endpoint key, or whether mixed-orientation portals fail before the tunnel table
+is populated.
+
+Runtime result: mixed portals did create two tunnel records under the expected
+`x << 8 | z` endpoint keys. So `DoTunnelChanged` is not bailing out. The next
+diagnostic dumps the 11 dwords of each matching record value so mixed custom
+records can be compared against a working same-axis or native tunnel. If the
+payload differs in direction/network/cost fields, the issue is tunnel metadata
+content rather than absence of records.
+
+Same-axis and mixed-axis custom records both populate the `trafficSimulator +
+0xc8` hash map with peer endpoint data. Example:
+
+- same-axis `(73,82)` <-> `(87,74)`:
+  - key `0x4952` value starts with `0x01FE4A57`; low bytes `57 4A` are peer
+    `(87,74)` in `x,z` byte order.
+  - key `0x574A` value starts with `0x01FE5249`; low bytes `49 52` are peer
+    `(73,82)`.
+- mixed-axis `(72,82)` <-> `(75,70)`:
+  - key `0x4852` value starts with `0x01FE464B`; low bytes `4B 46` are peer
+    `(75,70)`.
+  - key `0x4B46` value starts with `0x01FE5248`; low bytes `48 52` are peer
+    `(72,82)`.
+
+That makes a simple "missing tunnel record" explanation unlikely.
+
+The PPC reference gives the useful names and layout for this payload:
+
+- value byte `0`: peer endpoint x;
+- value byte `1`: peer endpoint z;
+- value word at byte `2`: tunnel direction mask, observed as `0x01FE`;
+- remaining fields are tunnel costs;
+- a later word stores the network type.
+
+`DoConnectionsChanged` also does not use only this hash map for tunnel endpoint
+graph rebuilds. The PPC reference shows a later pass over a temporary tunnel
+connection list. On Windows this is visible at the `trafficSimulator + 0x104`
+sentinel pointer. That pass:
+
+- marks the endpoint cell traffic record as tunnel-related;
+- ensures base traffic records exist for travel modes 0 and 1;
+- walks neighbor directions around both endpoint cells;
+- uses `local_14[10]` as a per-network direction mask;
+- calls helper `0x0070eab0` to set per-cell connection bits.
+
+Helper `0x0070eab0` has a clean 6-byte prologue
+`53 8B 5C 24 08 55` and decompiles as:
+
+```cpp
+cell[x,z].mode[travelMode] |= 1 << (toDirection + fromDirection * 4);
+```
+
+For travel modes whose transit network is road, it also mirrors a related bit
+onto the adjacent cell. This is now hooked diagnostically as
+`AddTrafficConnection`, but only logs while the custom tool calls
+`DoConnectionsChanged`, and only for the two endpoint cells plus immediate
+neighbors.
+
+The custom tool's rebuild list was empty even when the `+0xc8` hash map was
+populated. Native placement had previously shown `tool->tunnelRecords=1`, while
+custom insertion had `tunnelRecords=0`; this is likely the missing commit-side
+side effect. The current experiment splices stack-owned temporary list nodes
+around the custom `DoConnectionsChanged` calls:
+
+- node byte `+8`: endpoint A x;
+- node byte `+9`: endpoint A z;
+- node byte `+10`: endpoint B x;
+- node byte `+11`: endpoint B z;
+- node word `+20`: tunnel mask, copied from endpoint A's `+0xc8` hash-map
+  record when available, otherwise `0x01FE`.
+
+The node payload is seeded from the matching `+0xc8` tunnel hash-map record
+before those endpoint/list fields are overwritten. This preserves the native
+cost and network payload rather than leaving the temporary list record mostly
+zeroed.
+
+One forward node and one reversed node are inserted. A single node proved that
+the list is consumed (`AddTrafficConnection` fired), but the resulting edge
+insertions were asymmetric: the first endpoint only received adjacent-cell
+edges, while the second endpoint received endpoint-side edges. The reversed node
+tests whether the native temporary list normally provides both endpoint
+orderings for a completed portal pair.
+
+The nodes are unlinked immediately after the rebuild scope exits. If this makes
+mixed-axis portals commute, the durable fix is to either reproduce the native
+network-tool tunnel-record commit path or keep carefully isolated temporary
+records around every explicit custom rebuild.
+
+Seeding the temporary nodes from the hash-map records did not change mixed-axis
+commute behavior. The next diagnostic hooks `DoConnectionsChanged` at Windows
+`0x0071A867`, after `sub esp, 0x58; mov eax, [esp+0x5c]`, with the six-byte
+prologue `56 8B F1 83 C0 FE`. It dumps the first few native tunnel-list records
+whenever the list is nonempty. The custom rebuild path suppresses this entry
+trace so a regular in-game tunnel can reveal the real temporary record layout
+without the custom synthetic records dominating the log.
+
+The first native test after this hook did not produce a nonempty
+`DoConnectionsChanged` entry list dump, but it did reconfirm that native
+placement has `tool->tunnelRecords=1` before both `InsertTunnelPiece` calls
+while custom placement has `tool->tunnelRecords=0`. The next diagnostic dumps
+the raw vector at `cSC4NetworkTool + 0xe4` as 16-byte records before/after
+`InsertTunnelPiece`. This is likely closer to the native source data for the
+temporary traffic rebuild list than the `+0xc8` tunnel hash map.
+
+Native `cSC4NetworkTool + 0xe4` tunnel records are stable construction input,
+not a per-portal insertion output. A straight native test showed one 16-byte
+record before and after both `InsertTunnelPiece` calls:
+
+- first endpoint `(42,114)` direction `3`;
+- second endpoint `(28,114)` direction `1`;
+- vector bytes: `4389B13C/438AFBBE/00000002/00000010`.
+
+The two integer fields match dragged/path indices used by native
+`InsertTunnelPieces`; the first two dwords are float-like construction
+constraints. This does not look like the traffic simulator's final tunnel
+connectivity record, and native `InsertTunnelPieces` still only supports
+straight same-row/same-column tunnel construction.
+
+The PPC reference exposed the more important traffic-side limitation. The
+tunnel hash map is consumed in three places:
+
+- `DoConnectionsChanged`;
+- `FloodSubnetwork`;
+- `cSC4PathFinder::FindPath`.
+
+In `FindPath`, the tunnel branch checks the current cell's tunnel bit, looks up
+`TunnelInfo` by current endpoint key, then jumps directly to the peer endpoint
+with:
+
+```cpp
+AddTripNode(peerX, peerZ, currentNode->edge, travelMode, tunnelCost, currentNode, ...);
+```
+
+That `currentNode->edge` reuse is fine when the two portals are opposite ends of
+the same axis: the edge by which the route entered one portal is also the edge
+that makes sense when arriving at the peer. It is wrong for mixed-axis custom
+tunnels. Example: a route entering an east-facing portal may arrive at a
+south-facing peer, but the pathfinder still labels the peer node with the
+east/west edge from the source side. Subsequent expansion then reads the wrong
+connection nibble from the peer endpoint cell.
+
+`FloodSubnetwork` has the same shape. After a tunnel hash lookup it moves to
+the peer endpoint but preserves the same edge/direction state for the peer
+network-info check. This can explain why mixed-axis portals can have rendered
+paths and tunnel hash records but still fail commute connectivity.
+
+Current experiment:
+
+- record each custom portal pair after directed path pairing is chosen;
+- store the arrival edge for each endpoint as the portal's tunnel-mouth side,
+  converted from tunnel-piece direction to pathfinder edge direction
+  (`0=W, 1=N, 2=E, 3=S`);
+- patch the tunnel-branch call site in Windows `cSC4PathFinder::FindPath`
+  at `0x006D9ACF` (`E8 CC F4 FF FF`, original target
+  `cSC4PathFinder_AddTripNode` at `0x006D8FA0`);
+- when the pathfinder jumps exactly from one custom endpoint to its peer,
+  rewrite the low two direction bits of the `edge` argument to the peer's
+  stored arrival edge before calling the original `AddTripNode`.
+
+The rewrite is now limited to mixed-axis portal pairs. Same-axis tunnels already
+match the native assumption that the edge used to enter one endpoint is valid at
+the peer, and forcing a geometrically selected path key back into `AddTripNode`
+regressed those cases. For mixed-axis pairs, the destination node edge should be
+the peer portal's tunnel mouth side. The incoming path key is still useful for
+`MakeTunnelPaths` stitching, but it is not authoritative for pathfinder node
+entry. The wrapper also preserves any upper bits in the edge byte instead of
+replacing the whole value with a bare `0..3` direction.
+
+Expected validation log during route search:
+
+```text
+TunnelPortalTool: rewrote pathfinder tunnel AddTripNode edge current=(...)
+```
+
+If this fires but mixed-axis commute still fails, the next target is the
+analogous direction preservation in `FloodSubnetwork` (`0x00722E18` is the
+Windows call to the tunnel hash-map lookup inside that routine).
