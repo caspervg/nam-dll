@@ -595,6 +595,7 @@ namespace
 
 	std::array<CustomTunnelRouteEdgeFix, 16> sCustomTunnelRouteEdgeFixes{};
 	uint32_t sNextCustomTunnelRouteEdgeFix = 0;
+	uint32_t sActiveMixedAxisCustomTunnelRouteEdgeFixCount = 0;
 
 	class CustomTunnelInsertionScope
 	{
@@ -624,12 +625,21 @@ namespace
 	{
 		CustomTunnelRouteEdgeFix& fix =
 			sCustomTunnelRouteEdgeFixes[sNextCustomTunnelRouteEdgeFix % sCustomTunnelRouteEdgeFixes.size()];
+		if (fix.active && fix.mixedAxis && sActiveMixedAxisCustomTunnelRouteEdgeFixCount != 0)
+		{
+			--sActiveMixedAxisCustomTunnelRouteEdgeFixCount;
+		}
+
 		fix.first = first;
 		fix.second = second;
 		fix.firstArrivalEdge = firstArrivalEdge & 3;
 		fix.secondArrivalEdge = secondArrivalEdge & 3;
 		fix.mixedAxis = mixedAxis;
 		fix.active = true;
+		if (fix.mixedAxis)
+		{
+			++sActiveMixedAxisCustomTunnelRouteEdgeFixCount;
+		}
 		++sNextCustomTunnelRouteEdgeFix;
 
 		Logger::GetInstance().WriteLineFormatted(
@@ -651,30 +661,45 @@ namespace
 		uint32_t destinationZ,
 		uint8_t& edgeOut)
 	{
-		for (const CustomTunnelRouteEdgeFix& fix : sCustomTunnelRouteEdgeFixes)
+		if (sActiveMixedAxisCustomTunnelRouteEdgeFixCount != 0)
 		{
-			if (!fix.active)
+			for (const CustomTunnelRouteEdgeFix& fix : sCustomTunnelRouteEdgeFixes)
 			{
-				continue;
-			}
-			if (!fix.mixedAxis)
-			{
-				continue;
-			}
+				if (!fix.active)
+				{
+					continue;
+				}
+				if (!fix.mixedAxis)
+				{
+					continue;
+				}
 
-			if (SameCell(fix.first, currentX, currentZ) && SameCell(fix.second, destinationX, destinationZ))
-			{
-				edgeOut = fix.secondArrivalEdge;
-				return true;
-			}
-			if (SameCell(fix.second, currentX, currentZ) && SameCell(fix.first, destinationX, destinationZ))
-			{
-				edgeOut = fix.firstArrivalEdge;
-				return true;
+				if (SameCell(fix.first, currentX, currentZ) && SameCell(fix.second, destinationX, destinationZ))
+				{
+					edgeOut = fix.secondArrivalEdge;
+					return true;
+				}
+				if (SameCell(fix.second, currentX, currentZ) && SameCell(fix.first, destinationX, destinationZ))
+				{
+					edgeOut = fix.firstArrivalEdge;
+					return true;
+				}
 			}
 		}
 
-		return false;
+		if (currentX == destinationX || currentZ == destinationZ)
+		{
+			return false;
+		}
+
+		Endpoint destination;
+		destination.x = destinationX;
+		destination.z = destinationZ;
+		Endpoint current;
+		current.x = currentX;
+		current.z = currentZ;
+		edgeOut = TunnelPieceDirectionToPathDirection(InferTunnelPieceDirection(destination, current));
+		return true;
 	}
 
 	size_t VectorCountAt(const void* object, size_t offset, size_t itemSize)
@@ -1996,23 +2021,6 @@ namespace
 			? static_cast<uint32_t>(static_cast<uint16_t>(FieldAt<int16_t>(reinterpret_cast<void*>(currentNode), 0x16)))
 			: 0xFFFF;
 
-		// Log every call (throttled) so we can verify the hook fires.
-		const uint32_t hitNum = sAddTunnelTripNodeHookHitCount;
-		if (hitNum <= 20 || (hitNum % 200) == 0)
-		{
-			Logger::GetInstance().WriteLineFormatted(
-				LogLevel::Trace,
-				"TunnelPortalTool: Hook_AddTunnelTripNode hit #%u current=(%u,%u) dest=(%u,%u) edge=%u travelMode=%u currentNode=%p.",
-				hitNum,
-				currentX,
-				currentZ,
-				x,
-				z,
-				static_cast<uint32_t>(edge),
-				static_cast<uint32_t>(travelMode),
-				reinterpret_cast<void*>(currentNode));
-		}
-
 		uint8_t replacementEdge = 0xFF;
 		if (currentNode && TryGetCustomTunnelArrivalEdge(currentX, currentZ, x, z, replacementEdge))
 		{
@@ -2066,6 +2074,16 @@ namespace
 	uint32_t sFloodSubnetworkHookHitCount = 0;
 	uint32_t sFloodSubnetworkFixCallCount = 0;
 
+	bool __stdcall ShouldFixFloodSubnetworkTunnelEdge(
+		uint32_t currentX,
+		uint32_t currentY,
+		uint32_t peerX,
+		uint32_t peerY)
+	{
+		uint8_t arrivalEdge = 0xFF;
+		return TryGetCustomTunnelArrivalEdge(currentX, currentY, peerX, peerY, arrivalEdge);
+	}
+
 	void __stdcall FloodSubnetworkFixTunnelEdge(
 		uint32_t currentX,
 		uint32_t currentY,
@@ -2074,28 +2092,9 @@ namespace
 		uint32_t* edgePtr)
 	{
 		++sFloodSubnetworkFixCallCount;
-		const uint32_t edgeValue = edgePtr ? (*edgePtr & 0xFF) : 0xDEAD;
-
-		// Log every call so we can verify the hook fires and reads correct values.
-		// Use a throttle to avoid flooding: log the first 20 calls, then every 100th.
-		const uint32_t callNum = sFloodSubnetworkFixCallCount;
-		if (callNum <= 20 || (callNum % 100) == 0)
-		{
-			Logger::GetInstance().WriteLineFormatted(
-				LogLevel::Trace,
-				"TunnelPortalTool: FloodSubnetworkFixTunnelEdge call #%u hookHits=%u current=(%u,%u) peer=(%u,%u) edgePtr=%p edgeValue=%u.",
-				callNum,
-				sFloodSubnetworkHookHitCount,
-				currentX,
-				currentY,
-				peerX,
-				peerY,
-				edgePtr,
-				edgeValue);
-		}
 
 		uint8_t arrivalEdge = 0xFF;
-		if (TryGetCustomTunnelArrivalEdge(currentX, currentY, peerX, peerY, arrivalEdge))
+		if (edgePtr && TryGetCustomTunnelArrivalEdge(currentX, currentY, peerX, peerY, arrivalEdge))
 		{
 			const uint32_t currentEdge = *edgePtr & 0xFF;
 			Logger::GetInstance().WriteLineFormatted(
@@ -2126,9 +2125,25 @@ namespace
 	NAKED_FUN void Hook_FloodSubnetworkTunnelGetNetworkInfo()
 	{
 		__asm {
-			// Increment hit counter (no flags/registers affected meaningfully).
-			inc  dword ptr [sFloodSubnetworkHookHitCount]
+			// Native straight tunnels should take the original call path. Mixed-axis
+			// custom portal pairs use the wrapper so save/load keeps working.
+			push ecx
+			push edx
+			push dword ptr [esp+0x14]       // peerY, ESP = E-12
+			push dword ptr [esp+0x14]       // peerX, ESP = E-16
+			movzx eax, byte ptr [esp+0x35]  // currentY, byte 1 of packed state at E+0x25
+			push eax
+			movzx eax, byte ptr [esp+0x38]  // currentX, byte 0 of packed state at E+0x24
+			push eax
+			call ShouldFixFloodSubnetworkTunnelEdge
+			pop  edx
+			pop  ecx
+			test al, al
+			jnz  customTunnelEdgeFix
+			jmp  dword ptr [sOriginalFloodGetNetworkInfo]
 
+		customTunnelEdgeFix:
+			inc  dword ptr [sFloodSubnetworkHookHitCount]
 			// Phase 1: Call original GetNetworkInfo(this, networkType, peerX, peerY).
 			// ECX = this, stack = [retaddr, netType, peerX, peerY].
 			// Re-push args for the real thiscall (callee cleans 12 bytes).
