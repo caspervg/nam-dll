@@ -11,7 +11,7 @@ Settings::Settings() :
 	enableNetworkSlopePatch(true),
 	enableFlexPuzzlePiecePatch(true),
 	enableCommuteLoopPatch(true),
-	enableDirtRoadAccessPatch(true),
+	enableDirtRoadAccessPatch(false),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)

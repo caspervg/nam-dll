@@ -1,5 +1,6 @@
 #include "DirtRoadAccess.h"
 #include "Patching.h"
+#include "cISC4NetworkOccupant.h"
 
 namespace
 {
@@ -10,7 +11,7 @@ namespace
 
 	constexpr uint32_t kVanillaMotorizedVehicleNetworkMask = 0x00000449;
 	constexpr uint32_t kVanillaLowPrioFacingNetworkMask = 0x00000408;
-	constexpr uint32_t kDirtRoadNetworkMask = 1u << 11;
+	constexpr uint32_t kDirtRoadNetworkMask = 1u << cISC4NetworkOccupant::eNetworkType::DirtRoad;
 
 	constexpr uint32_t kAdjustedMotorizedVehicleNetworkMask = kVanillaMotorizedVehicleNetworkMask | kDirtRoadNetworkMask;
 	constexpr uint32_t kAdjustedLowPriorityFacingNetworkMask = kVanillaLowPrioFacingNetworkMask | kDirtRoadNetworkMask;
