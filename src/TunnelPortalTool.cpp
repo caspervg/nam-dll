@@ -517,10 +517,6 @@ namespace
 		ClearCustomTunnelRouteEdgeFixes();
 		sRegisteredTrafficSimulator = trafficSimulator;
 		sSavedTunnelRouteEdgeFixesScanned = false;
-		Logger::GetInstance().WriteLineFormatted(
-			LogLevel::Debug,
-			"TunnelPortalTool: reset custom tunnel registry, trafficSimulator=%p.",
-			trafficSimulator);
 	}
 
 	void RegisterCustomTunnelRouteEdgeFix(
@@ -538,16 +534,6 @@ namespace
 		fix.secondArrivalEdge = secondArrivalEdge & 3;
 		fix.active = true;
 		++sNextCustomTunnelRouteEdgeFix;
-
-		Logger::GetInstance().WriteLineFormatted(
-			LogLevel::Debug,
-			"TunnelPortalTool: registered custom tunnel edge fix (%u,%u)->(%u,%u), arrivalEdges first=%u second=%u.",
-			first.x,
-			first.z,
-			second.x,
-			second.z,
-			static_cast<uint32_t>(fix.firstArrivalEdge),
-			static_cast<uint32_t>(fix.secondArrivalEdge));
 	}
 
 	bool TryGetCustomTunnelArrivalEdge(
@@ -565,11 +551,6 @@ namespace
 		if (!sSavedTunnelRouteEdgeFixesScanned && trafficSimulator)
 		{
 			sSavedTunnelRouteEdgeFixesScanned = RegisterSavedCustomTunnelRouteEdgeFixes(trafficSimulator);
-			Logger::GetInstance().WriteLineFormatted(
-				LogLevel::Debug,
-				"TunnelPortalTool: lazy saved tunnel registry scan %s for trafficSimulator=%p.",
-				sSavedTunnelRouteEdgeFixesScanned ? "completed" : "deferred",
-				trafficSimulator);
 		}
 
 		for (const CustomTunnelRouteEdgeFix& fix : sCustomTunnelRouteEdgeFixes)
@@ -582,27 +563,11 @@ namespace
 			if (SameCell(fix.first, currentX, currentZ) && SameCell(fix.second, destinationX, destinationZ))
 			{
 				edgeOut = fix.secondArrivalEdge;
-				Logger::GetInstance().WriteLineFormatted(
-					LogLevel::Debug,
-					"TunnelPortalTool: matched custom tunnel edge fix (%u,%u)->(%u,%u), arrivalEdge=%u.",
-					currentX,
-					currentZ,
-					destinationX,
-					destinationZ,
-					static_cast<uint32_t>(edgeOut));
 				return true;
 			}
 			if (SameCell(fix.second, currentX, currentZ) && SameCell(fix.first, destinationX, destinationZ))
 			{
 				edgeOut = fix.firstArrivalEdge;
-				Logger::GetInstance().WriteLineFormatted(
-					LogLevel::Debug,
-					"TunnelPortalTool: matched custom tunnel edge fix (%u,%u)->(%u,%u), arrivalEdge=%u.",
-					currentX,
-					currentZ,
-					destinationX,
-					destinationZ,
-					static_cast<uint32_t>(edgeOut));
 				return true;
 			}
 		}
@@ -935,11 +900,6 @@ namespace
 		Endpoint networkEndpoint = endpoint;
 		if (!TryFindNetworkAtTileInternal(networkEndpoint.x, networkEndpoint.z, networkEndpoint.networkType))
 		{
-			Logger::GetInstance().WriteLineFormatted(
-				LogLevel::Debug,
-				"TunnelPortalTool: saved tunnel endpoint (%u,%u) skipped, no candidate network tile.",
-				endpoint.x,
-				endpoint.z);
 			return false;
 		}
 
@@ -952,27 +912,13 @@ namespace
 		if (occupant && occupant->QueryInterface(kNetworkTunnelOccupantID, tunnelOccupant.AsPPVoid()) && tunnelOccupant)
 		{
 			directionOut = occupant->GetRotation() & 3;
-			Logger::GetInstance().WriteLineFormatted(
-				LogLevel::Debug,
-				"TunnelPortalTool: saved tunnel endpoint (%u,%u) direction=%u from tunnel occupant rotation.",
-				endpoint.x,
-				endpoint.z,
-				static_cast<uint32_t>(directionOut));
 			return true;
 		}
 
-		const bool inferred = TryInferTunnelPieceDirectionFromSurfaceApproach(
+		return TryInferTunnelPieceDirectionFromSurfaceApproach(
 			cellInfo,
 			networkEndpoint.networkType,
 			directionOut);
-		Logger::GetInstance().WriteLineFormatted(
-			LogLevel::Debug,
-			"TunnelPortalTool: saved tunnel endpoint (%u,%u) %s direction from surface approach%s.",
-			endpoint.x,
-			endpoint.z,
-			inferred ? "inferred" : "could not infer",
-			inferred ? "" : " (not a custom portal candidate)");
-		return inferred;
 	}
 
 	bool RegisterSavedCustomTunnelRouteEdgeFixes(cISC4TrafficSimulator* trafficSimulator)
@@ -980,21 +926,11 @@ namespace
 		const RawTunnelMap* const map = GetTunnelMap(trafficSimulator);
 		if (!IsUsableTunnelMap(map))
 		{
-			Logger::GetInstance().WriteLineFormatted(
-				LogLevel::Debug,
-				"TunnelPortalTool: saved tunnel registry scan deferred, unusable tunnel map trafficSimulator=%p map=%p.",
-				trafficSimulator,
-				map);
 			return false;
 		}
 
 		const uintptr_t bucketCount = static_cast<uintptr_t>(map->end - map->start);
 		uint32_t visitedNodes = 0;
-		uint32_t decodedPairs = 0;
-		uint32_t skippedKeyMismatch = 0;
-		uint32_t skippedDirection = 0;
-		uint32_t skippedNativeDirection = 0;
-		const uint32_t registeredBefore = sNextCustomTunnelRouteEdgeFix;
 		for (RawTunnelMapNode** bucket = map->start; bucket != map->end && visitedNodes < kMaxTunnelMapNodes; ++bucket)
 		{
 			for (RawTunnelMapNode* node = *bucket; node && visitedNodes < kMaxTunnelMapNodes; node = node->next)
@@ -1011,17 +947,14 @@ namespace
 				const uint16_t secondKey = PackedCellKey(second.x, second.z);
 				if (node->key != firstKey || firstKey > secondKey)
 				{
-					++skippedKeyMismatch;
 					continue;
 				}
-				++decodedPairs;
 
 				uint8_t firstDirection = 0xFF;
 				uint8_t secondDirection = 0xFF;
 				if (!TryInferTunnelPieceDirectionAtEndpoint(first, firstDirection)
 					|| !TryInferTunnelPieceDirectionAtEndpoint(second, secondDirection))
 				{
-					++skippedDirection;
 					continue;
 				}
 
@@ -1029,7 +962,6 @@ namespace
 				const uint8_t secondVectorDirection = InferTunnelPieceDirection(second, first);
 				if (firstDirection == firstVectorDirection && secondDirection == secondVectorDirection)
 				{
-					++skippedNativeDirection;
 					continue;
 				}
 
@@ -1040,18 +972,6 @@ namespace
 					TunnelPieceDirectionToPathDirection(secondDirection));
 			}
 		}
-
-		Logger::GetInstance().WriteLineFormatted(
-			LogLevel::Debug,
-			"TunnelPortalTool: saved tunnel registry scan completed, trafficSimulator=%p buckets=%u nodes=%u pairs=%u registered=%u skippedKey=%u skippedDirection=%u skippedNative=%u.",
-			trafficSimulator,
-			static_cast<uint32_t>(bucketCount),
-			visitedNodes,
-			decodedPairs,
-			sNextCustomTunnelRouteEdgeFix - registeredBefore,
-			skippedKeyMismatch,
-			skippedDirection,
-			skippedNativeDirection);
 
 		return true;
 	}
