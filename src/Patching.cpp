@@ -50,7 +50,6 @@ void Patching::PatchImmediate32(const uint32_t address, const uint32_t expectedV
 		&oldProtect));
 
 	std::memcpy(immediate, &newValue, sizeof(newValue));
-	FlushInstructionCache(GetCurrentProcess(), immediate, sizeof(newValue));
 	VirtualProtect(immediate, sizeof(newValue), oldProtect, &oldProtect);
 }
 
