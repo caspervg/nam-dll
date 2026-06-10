@@ -370,3 +370,8 @@ FodyWeavers.xsd
 
 # vcpkg repository build files
 vcpkg_installed/
+
+build/
+cmake-build-debug/
+cmake-build-release/
+cmake-build-minsizerel/
