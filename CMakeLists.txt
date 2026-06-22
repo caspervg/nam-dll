@@ -30,6 +30,7 @@ set(NAM_SOURCES
     src/NetworkSlopes.cpp
     src/Patching.cpp
     src/RuleEquivalence.cpp
+    src/RHWNeighborConnections.cpp
     src/Rul2Engine.cpp
     src/SC4VersionDetection.cpp
     src/Settings.cpp
