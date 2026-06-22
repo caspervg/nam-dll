@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 
 class Settings final
@@ -17,5 +18,6 @@ public:
 	bool enableCommuteLoopPatch;
 	bool enableDirtRoadAccessPatch;
 	bool enableRHWNeighborConnectionPatch;
+	uint32_t rhwNeighborConnectionMaxSearchDistance;
 	bool enableKeyboardShortcuts;
 };

@@ -100,6 +100,26 @@ void Patching::PatchTestWordPtrEaxImmediate16(
 	PatchImmediate16(address + 3, expectedValue, newValue);
 }
 
+void Patching::RedirectCall(
+	const uint32_t address,
+	const uint32_t expectedTarget,
+	void (*pfnFunc)(void))
+{
+	const uint8_t* const instruction = reinterpret_cast<uint8_t*>(address);
+	THROW_HR_IF(E_FAIL, instruction[0] != 0xe8);
+
+	const auto relativeOffset = *reinterpret_cast<const int32_t*>(address + 1);
+	const uint32_t currentTarget = address + 5 + relativeOffset;
+	const uint32_t newTarget = reinterpret_cast<uint32_t>(pfnFunc);
+	if (currentTarget == newTarget)
+	{
+		return;
+	}
+
+	THROW_HR_IF(E_FAIL, currentTarget != expectedTarget);
+	PatchImmediate32(address + 1, expectedTarget - address - 5, newTarget - address - 5);
+}
+
 void Patching::InstallHook(uint32_t address, void (*pfnFunc)(void))
 {
 	DWORD oldProtect;

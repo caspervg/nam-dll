@@ -193,7 +193,13 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableFlexPuzzlePiecePatch, "FLEX Puzzle Piece RUL0 patch", FlexPieces::Install);
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
 		InstallWhen(settings.enableDirtRoadAccessPatch, "DirtRoad/RHW Access patch", DirtRoadAccess::Install);
-		InstallWhen(settings.enableRHWNeighborConnectionPatch, "RHW Neighbor Connection patch", RHWNeighborConnections::Install);
+		InstallWhen(
+			settings.enableRHWNeighborConnectionPatch,
+			"RHW Neighbor Connection patch",
+			[&settings]()
+			{
+				RHWNeighborConnections::Install(settings.rhwNeighborConnectionMaxSearchDistance);
+			});
 	}
 }
 

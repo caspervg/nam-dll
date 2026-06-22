@@ -13,6 +13,7 @@ Settings::Settings() :
 	enableCommuteLoopPatch(true),
 	enableDirtRoadAccessPatch(false),
 	enableRHWNeighborConnectionPatch(false),
+	rhwNeighborConnectionMaxSearchDistance(8),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -36,6 +37,13 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableCommuteLoopPatch", enableCommuteLoopPatch);
 			readBoolProp("EnableDirtRoadAccessPatch", enableDirtRoadAccessPatch);
 			readBoolProp("EnableRHWNeighborConnectionPatch", enableRHWNeighborConnectionPatch);
+
+			const std::string maxSearchDistance =
+				ini.get("NAM").get("RHWNeighborConnectionMaxSearchDistance");
+			if (!maxSearchDistance.empty())
+			{
+				rhwNeighborConnectionMaxSearchDistance = std::stoul(maxSearchDistance);
+			}
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}
