@@ -51,7 +51,7 @@
 #include "FlexPieces.h"
 #include "CommuteLoop.h"
 #include "DirtRoadAccess.h"
-#include "RHWNeighborConnections.h"
+#include "NeighborConnections.h"
 
 static constexpr uint32_t kNAMDllDirectorID = 0x4AC2AEFF;
 
@@ -193,21 +193,18 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableFlexPuzzlePiecePatch, "FLEX Puzzle Piece RUL0 patch", FlexPieces::Install);
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
 		InstallWhen(settings.enableDirtRoadAccessPatch, "DirtRoad/RHW Access patch", DirtRoadAccess::Install);
-		const bool installNeighborConnectionPatch =
-			settings.enableNeighborConnectionPatch &&
-			(settings.enableRHWNeighborConnections || settings.enableNWMNeighborConnections);
 		InstallWhen(
-			installNeighborConnectionPatch,
+			settings.enableNeighborConnectionPatch,
 			"Neighbor Connection patch",
 			[&settings]()
 			{
-				RHWNeighborConnections::Options options;
+				NeighborConnections::Options options;
 				options.maxSearchDistance = settings.neighborConnectionMaxSearchDistance;
 				options.maxGroupingGap = settings.neighborConnectionMaxGroupingGap;
 				options.enableRHW = settings.enableRHWNeighborConnections;
 				options.enableOWR = settings.enableOWRNeighborConnections;
 				options.enableNWM = settings.enableNWMNeighborConnections;
-				RHWNeighborConnections::Install(options);
+				NeighborConnections::Install(options);
 			});
 	}
 }

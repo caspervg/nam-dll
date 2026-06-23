@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-namespace RHWNeighborConnections
+namespace NeighborConnections
 {
 	struct Options
 	{
