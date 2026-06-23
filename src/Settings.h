@@ -18,6 +18,7 @@ public:
 	bool enableCommuteLoopPatch;
 	bool enableDirtRoadAccessPatch;
 	bool enableRHWNeighborConnectionPatch;
+	bool enableOWRNeighborConnectionSubpatch;
 	uint32_t rhwNeighborConnectionMaxSearchDistance;
 	uint32_t rhwNeighborConnectionMaxGroupingGap;
 	bool enableRHWNeighborConnectionDebugLogging;

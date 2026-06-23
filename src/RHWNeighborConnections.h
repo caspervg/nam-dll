@@ -3,5 +3,9 @@
 
 namespace RHWNeighborConnections
 {
-	void Install(uint32_t maxSearchDistance, uint32_t maxGroupingGap, bool enableDebugLogging);
+	void Install(
+		uint32_t maxSearchDistance,
+		uint32_t maxGroupingGap,
+		bool enableOWRNeighborConnectionSubpatch,
+		bool enableDebugLogging);
 }

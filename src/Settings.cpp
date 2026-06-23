@@ -13,6 +13,7 @@ Settings::Settings() :
 	enableCommuteLoopPatch(true),
 	enableDirtRoadAccessPatch(false),
 	enableRHWNeighborConnectionPatch(false),
+	enableOWRNeighborConnectionSubpatch(false),
 	rhwNeighborConnectionMaxSearchDistance(8),
 	rhwNeighborConnectionMaxGroupingGap(2),
 	enableRHWNeighborConnectionDebugLogging(false),
@@ -39,6 +40,9 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableCommuteLoopPatch", enableCommuteLoopPatch);
 			readBoolProp("EnableDirtRoadAccessPatch", enableDirtRoadAccessPatch);
 			readBoolProp("EnableRHWNeighborConnectionPatch", enableRHWNeighborConnectionPatch);
+			readBoolProp(
+				"EnableOWRNeighborConnectionSubpatch",
+				enableOWRNeighborConnectionSubpatch);
 			readBoolProp(
 				"EnableRHWNeighborConnectionDebugLogging",
 				enableRHWNeighborConnectionDebugLogging);

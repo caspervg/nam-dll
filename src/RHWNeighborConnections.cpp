@@ -17,11 +17,14 @@ namespace
 	constexpr uint32_t kReturnPathFindReturnTileCallAddress = 0x0071c952;
 	constexpr uint32_t kFindHighwayReturnTileAddress = 0x0070dd30;
 	constexpr uint32_t kGetTrafficNeighborConnectionAddress = 0x0070f970;
+	constexpr uint32_t kOWRNetworkTypeToNeighborConnectionTypeAddress = 0x00aa84ec;
 
 	constexpr uint16_t kVanillaDividedNetworkConnectionMask = 0x1108;
 	constexpr uint16_t kDirtRoadNeighborConnectionMask = 0x0400;
 	constexpr uint16_t kRHWDividedNetworkConnectionMask =
 		kVanillaDividedNetworkConnectionMask | kDirtRoadNeighborConnectionMask;
+	constexpr uint32_t kNoNeighborConnectionType = 0;
+	constexpr uint32_t kDirtRoadNeighborConnectionType = 10;
 
 	// Windows cSC4TrafficSimulator layout confirmed against 1.1.641.
 	constexpr size_t kMaximumXOffset = 0x28;
@@ -602,6 +605,7 @@ namespace
 void RHWNeighborConnections::Install(
 	const uint32_t maxSearchDistance,
 	const uint32_t maxGroupingGap,
+	const bool enableOWRNeighborConnectionSubpatch,
 	const bool enableDebugLogging)
 {
 	g_maxSearchDistance = std::clamp(
@@ -628,4 +632,12 @@ void RHWNeighborConnections::Install(
 		kReturnPathNetworkMaskTestAddress,
 		kVanillaDividedNetworkConnectionMask,
 		kRHWDividedNetworkConnectionMask);
+
+	if (enableOWRNeighborConnectionSubpatch)
+	{
+		Patching::PatchImmediate32(
+			kOWRNetworkTypeToNeighborConnectionTypeAddress,
+			kNoNeighborConnectionType,
+			kDirtRoadNeighborConnectionType);
+	}
 }

@@ -201,6 +201,7 @@ noMatchingTunnelNetwork:
 				RHWNeighborConnections::Install(
 					settings.rhwNeighborConnectionMaxSearchDistance,
 					settings.rhwNeighborConnectionMaxGroupingGap,
+					settings.enableOWRNeighborConnectionSubpatch,
 					settings.enableRHWNeighborConnectionDebugLogging);
 			});
 	}
