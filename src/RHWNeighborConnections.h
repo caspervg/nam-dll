@@ -7,5 +7,6 @@ namespace RHWNeighborConnections
 		uint32_t maxSearchDistance,
 		uint32_t maxGroupingGap,
 		bool enableOWRNeighborConnectionSubpatch,
+		bool enableNWMNeighborConnectionSubpatch,
 		bool enableDebugLogging);
 }

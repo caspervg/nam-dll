@@ -20,6 +20,7 @@ namespace
 	constexpr uint32_t kOWRNetworkTypeToNeighborConnectionTypeAddress = 0x00aa84ec;
 
 	constexpr uint16_t kVanillaDividedNetworkConnectionMask = 0x1108;
+	constexpr uint16_t kRoadNeighborConnectionMask = 0x0004;
 	constexpr uint16_t kDirtRoadNeighborConnectionMask = 0x0400;
 	constexpr uint16_t kRHWDividedNetworkConnectionMask =
 		kVanillaDividedNetworkConnectionMask | kDirtRoadNeighborConnectionMask;
@@ -42,6 +43,7 @@ namespace
 	uint32_t g_maxSearchDistance = kMinimumSearchDistance;
 	uint32_t g_maxGroupingGap = 0;
 	uint32_t g_remainingDebugLogEntries = 0;
+	bool g_enableNWMNeighborConnectionSubpatch = false;
 
 	using FindHighwayReturnTile = void (__thiscall*)(
 		void* pTrafficSimulator,
@@ -71,10 +73,11 @@ namespace
 		int32_t x = 0;
 		int32_t z = 0;
 		int32_t offset = 0;
+		uint16_t neighborConnectionMask = 0;
 		uint16_t pathMatrix = 0;
 		PathDirection direction = PathDirection::None;
 		bool valid = false;
-		bool isRHW = false;
+		bool isEligibleNeighborConnection = false;
 	};
 
 	struct Band
@@ -229,6 +232,20 @@ namespace
 			: PathDirection::Inbound;
 	}
 
+	bool IsOneWayDirection(const PathDirection direction)
+	{
+		return direction == PathDirection::Inbound || direction == PathDirection::Outbound;
+	}
+
+	bool IsTargetDirection(
+		const PathDirection direction,
+		const PathDirection targetDirection,
+		const bool allowBidirectionalTarget)
+	{
+		return direction == targetDirection ||
+			(allowBidirectionalTarget && direction == PathDirection::Bidirectional);
+	}
+
 	const char* GetDirectionName(const PathDirection direction)
 	{
 		switch (direction)
@@ -273,12 +290,40 @@ namespace
 			outcome);
 	}
 
+	void WriteScanDebugLog(
+		const EdgeTile& tile,
+		const uint16_t eligibleNeighborConnectionMask,
+		const char* const passName)
+	{
+		if (g_remainingDebugLogEntries == 0)
+		{
+			return;
+		}
+
+		--g_remainingDebugLogEntries;
+		Logger::GetInstance().WriteLineFormatted(
+			LogLevel::Error,
+			"[RHW neighbor scan] pass=%s offset=%d tile=(%d,%d) valid=%u mask=0x%04X "
+			"eligibleMask=0x%04X eligible=%u matrix=0x%04X direction=%s",
+			passName,
+			tile.offset,
+			tile.x,
+			tile.z,
+			tile.valid ? 1u : 0u,
+			tile.neighborConnectionMask,
+			eligibleNeighborConnectionMask,
+			tile.isEligibleNeighborConnection ? 1u : 0u,
+			tile.pathMatrix,
+			GetDirectionName(tile.direction));
+	}
+
 	EdgeTile ReadEdgeTile(
 		void* const pTrafficSimulator,
 		const int32_t originX,
 		const int32_t originZ,
 		const int32_t stepX,
 		const int32_t stepZ,
+		const uint16_t eligibleNeighborConnectionMask,
 		const int32_t offset)
 	{
 		EdgeTile tile;
@@ -301,17 +346,15 @@ namespace
 			return tile;
 		}
 
-		tile.isRHW =
-			(GetNeighborConnectionMask(pTrafficSimulator, tile.x, tile.z) &
-			 kDirtRoadNeighborConnectionMask) != 0;
-		if (tile.isRHW)
-		{
-			tile.direction = GetPathDirection(
-				pTrafficSimulator,
-				tile.x,
-				tile.z,
-				tile.pathMatrix);
-		}
+		tile.neighborConnectionMask =
+			GetNeighborConnectionMask(pTrafficSimulator, tile.x, tile.z);
+		tile.isEligibleNeighborConnection =
+			(tile.neighborConnectionMask & eligibleNeighborConnectionMask) != 0;
+		tile.direction = GetPathDirection(
+			pTrafficSimulator,
+			tile.x,
+			tile.z,
+			tile.pathMatrix);
 		return tile;
 	}
 
@@ -341,7 +384,7 @@ namespace
 				break;
 			}
 
-			if (!tile.isRHW)
+			if (!tile.isEligibleNeighborConnection)
 			{
 				if (++gap > g_maxGroupingGap)
 				{
@@ -365,6 +408,7 @@ namespace
 		const std::array<EdgeTile, kScanCapacity>& scannedTiles,
 		const PathDirection sourceDirection,
 		const PathDirection targetDirection,
+		const bool allowBidirectionalTarget,
 		int32_t& targetStart)
 	{
 		for (int32_t offset = 1;
@@ -376,18 +420,20 @@ namespace
 			{
 				break;
 			}
-			if (!tile.isRHW || tile.direction == sourceDirection)
+			if (!tile.isEligibleNeighborConnection || tile.direction == sourceDirection)
 			{
 				continue;
 			}
-			if (tile.direction == targetDirection)
+			if (IsTargetDirection(tile.direction, targetDirection, allowBidirectionalTarget))
 			{
 				targetStart = offset;
 				return true;
 			}
 
-			// A bidirectional or unclassified DirtRoad connection is a corridor
-			// boundary, not something that should be searched through.
+			// An unclassified tile is a corridor boundary, not something that
+			// should be searched through. Bidirectional targets are only allowed
+			// for Road/NWM where widened-network edge tiles can expose both
+			// boundary directions on the return carriageway.
 			break;
 		}
 		return false;
@@ -403,7 +449,7 @@ namespace
 		for (int32_t offset = minimumOffset; offset <= maximumOffset; ++offset)
 		{
 			const EdgeTile& tile = GetScannedTile(scannedTiles, offset);
-			if (tile.valid && tile.isRHW && tile.direction == sourceDirection)
+			if (tile.valid && tile.isEligibleNeighborConnection && tile.direction == sourceDirection)
 			{
 				result.Add(tile);
 			}
@@ -414,6 +460,7 @@ namespace
 	BandCollection BuildTargetBands(
 		const std::array<EdgeTile, kScanCapacity>& scannedTiles,
 		const PathDirection targetDirection,
+		const bool allowBidirectionalTarget,
 		const int32_t targetStart)
 	{
 		BandCollection result;
@@ -428,7 +475,7 @@ namespace
 				break;
 			}
 
-			if (!tile.isRHW)
+			if (!tile.isEligibleNeighborConnection)
 			{
 				if (++gap > g_maxGroupingGap)
 				{
@@ -437,7 +484,8 @@ namespace
 				continue;
 			}
 
-			if (tile.direction != targetDirection || gap > g_maxGroupingGap)
+			if (!IsTargetDirection(tile.direction, targetDirection, allowBidirectionalTarget) ||
+				gap > g_maxGroupingGap)
 			{
 				break;
 			}
@@ -470,31 +518,50 @@ namespace
 		return false;
 	}
 
-	void __fastcall FindRHWReturnTile(
+	bool TryGetEdgeScanStep(
 		void* const pTrafficSimulator,
-		void*,
-		int32_t* const pX,
-		int32_t* const pZ,
-		const bool reverseSearch)
+		const int32_t x,
+		const int32_t z,
+		int32_t& stepX,
+		int32_t& stepZ)
 	{
-		const int32_t originX = *pX;
-		const int32_t originZ = *pZ;
-		const uint16_t originMask = GetNeighborConnectionMask(pTrafficSimulator, originX, originZ);
-
-		pFindHighwayReturnTile(pTrafficSimulator, pX, pZ, reverseSearch);
-
-		if ((originMask & kDirtRoadNeighborConnectionMask) == 0)
+		int32_t cellX = 0;
+		int32_t cellZ = 0;
+		uint32_t edge = 0;
+		if (!TryGetBoundaryCellAndEdge(pTrafficSimulator, x, z, cellX, cellZ, edge))
 		{
-			return;
+			return false;
 		}
 
-		const int32_t stepX = *pX - originX;
-		const int32_t stepZ = *pZ - originZ;
+		stepX = edge == 1 || edge == 3 ? 1 : 0;
+		stepZ = edge == 0 || edge == 2 ? 1 : 0;
+		return true;
+	}
+
+	bool TryFindPairedReturnTile(
+		void* const pTrafficSimulator,
+		const int32_t originX,
+		const int32_t originZ,
+		const int32_t stepX,
+		const int32_t stepZ,
+		const uint16_t eligibleNeighborConnectionMask,
+		const bool enableScanDebugLogging,
+		const bool allowBidirectionalTarget,
+		const char* const passName,
+		int32_t& resultX,
+		int32_t& resultZ,
+		EdgeTile& origin,
+		size_t& sourceBandCount,
+		size_t& targetBandCount,
+		const char*& outcome)
+	{
+		sourceBandCount = 0;
+		targetBandCount = 0;
+
 		if ((stepX == 0 && stepZ == 0) || (stepX != 0 && stepZ != 0))
 		{
-			*pX = originX;
-			*pZ = originZ;
-			return;
+			outcome = "invalid-scan-step";
+			return false;
 		}
 
 		std::array<EdgeTile, kScanCapacity> scannedTiles{};
@@ -510,27 +577,40 @@ namespace
 					originZ,
 					stepX,
 					stepZ,
+					eligibleNeighborConnectionMask,
 					offset);
 		}
-
-		const EdgeTile& origin = GetScannedTile(scannedTiles, 0);
-		if (origin.direction != PathDirection::Inbound &&
-			origin.direction != PathDirection::Outbound)
+		if (enableScanDebugLogging)
 		{
-			*pX = originX;
-			*pZ = originZ;
-			WriteDebugLog(origin, *pX, *pZ, 0, 0, "origin-not-one-way");
-			return;
+			for (int32_t offset = -static_cast<int32_t>(g_maxSearchDistance);
+				offset <= static_cast<int32_t>(g_maxSearchDistance);
+				++offset)
+			{
+				WriteScanDebugLog(
+					GetScannedTile(scannedTiles, offset),
+					eligibleNeighborConnectionMask,
+					passName);
+			}
+		}
+
+		origin = GetScannedTile(scannedTiles, 0);
+		if (!IsOneWayDirection(origin.direction))
+		{
+			outcome = "origin-not-one-way";
+			return false;
 		}
 
 		const PathDirection targetDirection = GetOppositeDirection(origin.direction);
 		int32_t targetStart = 0;
-		if (!FindTargetStart(scannedTiles, origin.direction, targetDirection, targetStart))
+		if (!FindTargetStart(
+			scannedTiles,
+			origin.direction,
+			targetDirection,
+			allowBidirectionalTarget,
+			targetStart))
 		{
-			*pX = originX;
-			*pZ = originZ;
-			WriteDebugLog(origin, *pX, *pZ, 0, 0, "no-opposite-direction");
-			return;
+			outcome = "no-opposite-direction";
+			return false;
 		}
 
 		const int32_t negativeSourceExtent =
@@ -543,36 +623,26 @@ namespace
 			negativeSourceExtent,
 			std::min(positiveSourceExtent, targetStart - 1));
 		const BandCollection targetBands =
-			BuildTargetBands(scannedTiles, targetDirection, targetStart);
+			BuildTargetBands(
+				scannedTiles,
+				targetDirection,
+				allowBidirectionalTarget,
+				targetStart);
+		sourceBandCount = sourceBands.bandCount;
+		targetBandCount = targetBands.bandCount;
 
 		if (sourceBands.bandCount == 0 || targetBands.bandCount == 0)
 		{
-			*pX = originX;
-			*pZ = originZ;
-			WriteDebugLog(
-				origin,
-				*pX,
-				*pZ,
-				sourceBands.bandCount,
-				targetBands.bandCount,
-				"empty-band-group");
-			return;
+			outcome = "empty-band-group";
+			return false;
 		}
 
 		size_t sourceBandIndex = 0;
 		size_t sourceTileIndex = 0;
 		if (!FindTileInBands(sourceBands, 0, sourceBandIndex, sourceTileIndex))
 		{
-			*pX = originX;
-			*pZ = originZ;
-			WriteDebugLog(
-				origin,
-				*pX,
-				*pZ,
-				sourceBands.bandCount,
-				targetBands.bandCount,
-				"origin-not-in-source-band");
-			return;
+			outcome = "origin-not-in-source-band";
+			return false;
 		}
 
 		// Source bands and lanes are indexed from the target-facing side. Target
@@ -590,15 +660,110 @@ namespace
 		const EdgeTile& result =
 			targetBands.tiles[targetBand.firstTile + targetTileIndex];
 
-		*pX = result.x;
-		*pZ = result.z;
+		resultX = result.x;
+		resultZ = result.z;
+		outcome = "paired";
+		return true;
+	}
+
+	void __fastcall FindRHWReturnTile(
+		void* const pTrafficSimulator,
+		void*,
+		int32_t* const pX,
+		int32_t* const pZ,
+		const bool reverseSearch)
+	{
+		const int32_t originX = *pX;
+		const int32_t originZ = *pZ;
+		const uint16_t originMask = GetNeighborConnectionMask(pTrafficSimulator, originX, originZ);
+		const bool isRHWConnection = (originMask & kDirtRoadNeighborConnectionMask) != 0;
+		const bool isNWMConnection =
+			g_enableNWMNeighborConnectionSubpatch &&
+			(originMask & kRoadNeighborConnectionMask) != 0 &&
+			(originMask & kVanillaDividedNetworkConnectionMask) == 0 &&
+			!isRHWConnection;
+
+		if (!isRHWConnection && !isNWMConnection)
+		{
+			pFindHighwayReturnTile(pTrafficSimulator, pX, pZ, reverseSearch);
+			return;
+		}
+
+		int32_t stepX = 0;
+		int32_t stepZ = 0;
+		if (isRHWConnection)
+		{
+			pFindHighwayReturnTile(pTrafficSimulator, pX, pZ, reverseSearch);
+			stepX = *pX - originX;
+			stepZ = *pZ - originZ;
+		}
+		else if (!TryGetEdgeScanStep(pTrafficSimulator, originX, originZ, stepX, stepZ))
+		{
+			*pX = originX;
+			*pZ = originZ;
+			return;
+		}
+
+		const uint16_t eligibleNeighborConnectionMask =
+			isRHWConnection ? kDirtRoadNeighborConnectionMask : kRoadNeighborConnectionMask;
+		EdgeTile origin;
+		size_t sourceBandCount = 0;
+		size_t targetBandCount = 0;
+		const char* outcome = "unmatched";
+		bool paired = TryFindPairedReturnTile(
+			pTrafficSimulator,
+			originX,
+			originZ,
+			stepX,
+			stepZ,
+			eligibleNeighborConnectionMask,
+			isNWMConnection,
+			isNWMConnection,
+			"primary",
+			*pX,
+			*pZ,
+			origin,
+			sourceBandCount,
+			targetBandCount,
+			outcome);
+		if (!paired)
+		{
+			if (isNWMConnection && IsOneWayDirection(origin.direction))
+			{
+				paired = TryFindPairedReturnTile(
+					pTrafficSimulator,
+					originX,
+					originZ,
+					-stepX,
+					-stepZ,
+					eligibleNeighborConnectionMask,
+					true,
+					true,
+					"reverse",
+					*pX,
+					*pZ,
+					origin,
+					sourceBandCount,
+					targetBandCount,
+					outcome);
+			}
+
+			if (!paired)
+			{
+				*pX = originX;
+				*pZ = originZ;
+				WriteDebugLog(origin, *pX, *pZ, sourceBandCount, targetBandCount, outcome);
+				return;
+			}
+		}
+
 		WriteDebugLog(
 			origin,
 			*pX,
 			*pZ,
-			sourceBands.bandCount,
-			targetBands.bandCount,
-			"paired");
+			sourceBandCount,
+			targetBandCount,
+			outcome);
 	}
 }
 
@@ -606,8 +771,10 @@ void RHWNeighborConnections::Install(
 	const uint32_t maxSearchDistance,
 	const uint32_t maxGroupingGap,
 	const bool enableOWRNeighborConnectionSubpatch,
+	const bool enableNWMNeighborConnectionSubpatch,
 	const bool enableDebugLogging)
 {
+	g_enableNWMNeighborConnectionSubpatch = enableNWMNeighborConnectionSubpatch;
 	g_maxSearchDistance = std::clamp(
 		maxSearchDistance,
 		kMinimumSearchDistance,
@@ -627,11 +794,15 @@ void RHWNeighborConnections::Install(
 	Patching::PatchTestWordPtrEaxImmediate16(
 		kForwardPathNetworkMaskTestAddress,
 		kVanillaDividedNetworkConnectionMask,
-		kRHWDividedNetworkConnectionMask);
+		enableNWMNeighborConnectionSubpatch
+			? static_cast<uint16_t>(kRHWDividedNetworkConnectionMask | kRoadNeighborConnectionMask)
+			: kRHWDividedNetworkConnectionMask);
 	Patching::PatchTestWordPtrEaxImmediate16(
 		kReturnPathNetworkMaskTestAddress,
 		kVanillaDividedNetworkConnectionMask,
-		kRHWDividedNetworkConnectionMask);
+		enableNWMNeighborConnectionSubpatch
+			? static_cast<uint16_t>(kRHWDividedNetworkConnectionMask | kRoadNeighborConnectionMask)
+			: kRHWDividedNetworkConnectionMask);
 
 	if (enableOWRNeighborConnectionSubpatch)
 	{

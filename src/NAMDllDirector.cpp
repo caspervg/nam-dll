@@ -202,6 +202,7 @@ noMatchingTunnelNetwork:
 					settings.rhwNeighborConnectionMaxSearchDistance,
 					settings.rhwNeighborConnectionMaxGroupingGap,
 					settings.enableOWRNeighborConnectionSubpatch,
+					settings.enableNWMNeighborConnectionSubpatch,
 					settings.enableRHWNeighborConnectionDebugLogging);
 			});
 	}

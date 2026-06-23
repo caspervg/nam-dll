@@ -14,6 +14,7 @@ Settings::Settings() :
 	enableDirtRoadAccessPatch(false),
 	enableRHWNeighborConnectionPatch(false),
 	enableOWRNeighborConnectionSubpatch(false),
+	enableNWMNeighborConnectionSubpatch(false),
 	rhwNeighborConnectionMaxSearchDistance(8),
 	rhwNeighborConnectionMaxGroupingGap(2),
 	enableRHWNeighborConnectionDebugLogging(false),
@@ -43,6 +44,9 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp(
 				"EnableOWRNeighborConnectionSubpatch",
 				enableOWRNeighborConnectionSubpatch);
+			readBoolProp(
+				"EnableNWMNeighborConnectionSubpatch",
+				enableNWMNeighborConnectionSubpatch);
 			readBoolProp(
 				"EnableRHWNeighborConnectionDebugLogging",
 				enableRHWNeighborConnectionDebugLogging);
