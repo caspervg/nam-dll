@@ -1,4 +1,5 @@
 #include "NeighborConnections.h"
+#include "Logger.h"
 #include "Patching.h"
 
 #include <algorithm>
@@ -79,6 +80,7 @@ namespace
 	constexpr uint16_t kVanillaDividedNetworkNcMask = 0x1108;
 	constexpr uint16_t kRoadNcMask = 0x0004;
 	constexpr uint16_t kDirtRoadNcMask = 0x0400;
+	constexpr uint16_t kOWRMetadataNcMask = 0x2000;
 	constexpr uint32_t kNoNcType = 0;
 	constexpr uint32_t kDirtRoadNcType = 10;
 
@@ -97,6 +99,7 @@ namespace
 	uint32_t gMaxSearchDistance = kMinSearchDistance;
 	uint32_t gMaxGroupingGap = 0;
 	bool gEnableNWM = false;
+	uint32_t gDiagnosticLogCount = 0;
 
 	using FindHighwayReturnTile = void (__thiscall*)(void* pTrafficSim, int32_t* pX, int32_t* pZ, bool reverseSearch);
 	using GetTrafficNeighborConnection = void* (__thiscall*)(void* pTrafficSim, int32_t x, int32_t z);
@@ -127,6 +130,8 @@ namespace
 	};
 
 	using EdgeScan = std::array<EdgeTile, kScanCapacity>;
+
+	const EdgeTile& GetScannedTile(const EdgeScan& scannedTiles, int32_t offset);
 
 	// A contiguous run of scanned tiles that belong to the same carriageway group.
 	struct Band
@@ -165,6 +170,175 @@ namespace
 			++bands[bandCount - 1].tileCount;
 		}
 	};
+
+	struct PairingDiagnostics
+	{
+		const char* mode = "";
+		uint16_t originMask = 0;
+		bool reverseSearch = false;
+		bool fallbackPass = false;
+	};
+
+	const char* PathDirName(const PathDir dir)
+	{
+		switch (dir)
+		{
+		case PathDir::None:
+			return "None";
+		case PathDir::Inbound:
+			return "Inbound";
+		case PathDir::Outbound:
+			return "Outbound";
+		case PathDir::Bidi:
+			return "Bidi";
+		default:
+			return "?";
+		}
+	}
+
+	bool ScanContainsBidirectionalPath(const EdgeScan& scannedTiles)
+	{
+		for (int32_t offset = -static_cast<int32_t>(gMaxSearchDistance);
+			offset <= static_cast<int32_t>(gMaxSearchDistance);
+			++offset)
+		{
+			if (GetScannedTile(scannedTiles, offset).direction == PathDir::Bidi)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void LogPairingDiagnostics(
+		const PairingDiagnostics& diagnostics,
+		const EdgeScan& scannedTiles,
+		const int32_t originX,
+		const int32_t originZ,
+		const int32_t stepX,
+		const int32_t stepZ,
+		const uint16_t eligibleNcMask,
+		const bool allowBidiTarget,
+		const bool paired,
+		const char* const reason,
+		const int32_t targetStart,
+		const size_t sourceBandCount,
+		const size_t targetBandCount,
+		const int32_t resultX,
+		const int32_t resultZ)
+	{
+		constexpr uint32_t kMaxDiagnosticLogs = 16;
+		if (gDiagnosticLogCount >= kMaxDiagnosticLogs)
+		{
+			return;
+		}
+
+		const bool scanHasBidi = ScanContainsBidirectionalPath(scannedTiles);
+		if (paired && !scanHasBidi)
+		{
+			return;
+		}
+
+		++gDiagnosticLogCount;
+
+		Logger& logger = Logger::GetInstance();
+		logger.WriteLineFormatted(
+			LogLevel::Error,
+			"NC diagnostic %u/%u: mode=%s reverse=%d fallbackPass=%d origin=(%d,%d) originMask=0x%04X step=(%d,%d) eligibleMask=0x%04X allowBidiTarget=%d paired=%d reason=%s targetStart=%d sourceBands=%u targetBands=%u result=(%d,%d)",
+			gDiagnosticLogCount,
+			kMaxDiagnosticLogs,
+			diagnostics.mode,
+			diagnostics.reverseSearch ? 1 : 0,
+			diagnostics.fallbackPass ? 1 : 0,
+			originX,
+			originZ,
+			diagnostics.originMask,
+			stepX,
+			stepZ,
+			eligibleNcMask,
+			allowBidiTarget ? 1 : 0,
+			paired ? 1 : 0,
+			reason,
+			targetStart,
+			static_cast<unsigned>(sourceBandCount),
+			static_cast<unsigned>(targetBandCount),
+			resultX,
+			resultZ);
+
+		logger.WriteLine(
+			LogLevel::Error,
+			"NC diagnostic scan: offset x z valid eligible ncMask pathMatrix direction");
+		for (int32_t offset = -static_cast<int32_t>(gMaxSearchDistance);
+			offset <= static_cast<int32_t>(gMaxSearchDistance);
+			++offset)
+		{
+			const EdgeTile& tile = GetScannedTile(scannedTiles, offset);
+			logger.WriteLineFormatted(
+				LogLevel::Error,
+				"NC diagnostic scan: %+d %d %d %d %d 0x%04X 0x%04X %s",
+				offset,
+				tile.x,
+				tile.z,
+				tile.valid ? 1 : 0,
+				tile.isEligibleNc ? 1 : 0,
+				tile.ncMask,
+				tile.pathMatrix,
+				PathDirName(tile.direction));
+		}
+
+		if (gDiagnosticLogCount == kMaxDiagnosticLogs)
+		{
+			logger.WriteLine(
+				LogLevel::Error,
+				"NC diagnostic log limit reached; suppressing further neighbor connection diagnostics this session.");
+		}
+	}
+
+	bool LogPairingFailureWithoutScan(
+		const PairingDiagnostics& diagnostics,
+		const int32_t originX,
+		const int32_t originZ,
+		const int32_t stepX,
+		const int32_t stepZ,
+		const uint16_t eligibleNcMask,
+		const bool allowBidiTarget,
+		const char* const reason)
+	{
+		constexpr uint32_t kMaxDiagnosticLogs = 16;
+		if (gDiagnosticLogCount >= kMaxDiagnosticLogs)
+		{
+			return false;
+		}
+
+		++gDiagnosticLogCount;
+
+		Logger& logger = Logger::GetInstance();
+		logger.WriteLineFormatted(
+			LogLevel::Error,
+			"NC diagnostic %u/%u: mode=%s reverse=%d fallbackPass=%d origin=(%d,%d) originMask=0x%04X step=(%d,%d) eligibleMask=0x%04X allowBidiTarget=%d paired=0 reason=%s",
+			gDiagnosticLogCount,
+			kMaxDiagnosticLogs,
+			diagnostics.mode,
+			diagnostics.reverseSearch ? 1 : 0,
+			diagnostics.fallbackPass ? 1 : 0,
+			originX,
+			originZ,
+			diagnostics.originMask,
+			stepX,
+			stepZ,
+			eligibleNcMask,
+			allowBidiTarget ? 1 : 0,
+			reason);
+
+		if (gDiagnosticLogCount == kMaxDiagnosticLogs)
+		{
+			logger.WriteLine(
+				LogLevel::Error,
+				"NC diagnostic log limit reached; suppressing further neighbor connection diagnostics this session.");
+		}
+
+		return false;
+	}
 
 	uint16_t GetNeighborConnectionMask(void* const pTrafficSim, const int32_t x, const int32_t z)
 	{
@@ -276,6 +450,67 @@ namespace
 		return dir == targetDir || (allowBidiFallback && dir == PathDir::Bidi);
 	}
 
+	bool IsSourceDirection(
+		const PathDir dir,
+		const PathDir sourceDir,
+		const bool allowBidiSource,
+		const bool bidiMustBeContiguous,
+		const uint32_t gap)
+	{
+		if (dir == sourceDir)
+		{
+			return true;
+		}
+		return allowBidiSource && dir == PathDir::Bidi && (!bidiMustBeContiguous || gap == 0);
+	}
+
+	bool TryFindSourceDirectionNearOrigin(
+		const EdgeScan& scannedTiles,
+		const PathDir originDir,
+		const bool allowBidiSource,
+		PathDir& sourceDir)
+	{
+		if (IsOneWayDirection(originDir))
+		{
+			sourceDir = originDir;
+			return true;
+		}
+		if (!allowBidiSource || originDir != PathDir::Bidi)
+		{
+			return false;
+		}
+
+		uint32_t gap = 0;
+		for (int32_t offset = -1; offset >= -static_cast<int32_t>(gMaxSearchDistance); --offset)
+		{
+			const EdgeTile& tile = GetScannedTile(scannedTiles, offset);
+			if (!tile.valid)
+			{
+				break;
+			}
+			if (!tile.isEligibleNc)
+			{
+				if (++gap > gMaxGroupingGap)
+				{
+					break;
+				}
+				continue;
+			}
+			if (IsOneWayDirection(tile.direction))
+			{
+				sourceDir = tile.direction;
+				return true;
+			}
+			if (tile.direction != PathDir::Bidi)
+			{
+				break;
+			}
+			gap = 0;
+		}
+
+		return false;
+	}
+
 	EdgeTile ReadEdgeTile(void* const pTrafficSim, const int32_t originX, const int32_t originZ,
 	                      const int32_t stepX, const int32_t stepZ, const uint16_t eligibleNcMask, const int32_t offset)
 	{
@@ -305,7 +540,11 @@ namespace
 	}
 
 	// Finds how far the source carriageway continues from the origin, allowing small gaps.
-	int32_t FindSourceExtent(const EdgeScan& scannedTiles, const PathDir sourceDir, const int32_t inc)
+	int32_t FindSourceExtent(
+		const EdgeScan& scannedTiles,
+		const PathDir sourceDir,
+		const bool allowBidiSource,
+		const int32_t inc)
 	{
 		int32_t extent = 0;
 		uint32_t gap = 0;
@@ -329,7 +568,8 @@ namespace
 				continue;
 			}
 
-			if (tile.direction != sourceDir || gap > gMaxGroupingGap)
+			if (!IsSourceDirection(tile.direction, sourceDir, allowBidiSource, true, gap) ||
+				gap > gMaxGroupingGap)
 			{
 				break;
 			}
@@ -341,8 +581,15 @@ namespace
 	}
 
 	// Finds the first tile after the source side that can act as the return side.
-	bool FindTargetStart(const EdgeScan& scannedTiles, const PathDir sourceDir, const PathDir targetDir, const bool allowBidiTarget, int32_t& targetStart)
+	bool FindTargetStart(
+		const EdgeScan& scannedTiles,
+		const PathDir sourceDir,
+		const PathDir targetDir,
+		const bool allowBidiSource,
+		const bool allowBidiTarget,
+		int32_t& targetStart)
 	{
+		uint32_t gap = 0;
 		for (int32_t offset = 1;
 			offset <= static_cast<int32_t>(gMaxSearchDistance);
 			++offset)
@@ -352,8 +599,15 @@ namespace
 			{
 				break;
 			}
-			if (!tile.isEligibleNc || tile.direction == sourceDir)
+			if (!tile.isEligibleNc)
 			{
+				++gap;
+				continue;
+			}
+			if (tile.direction == sourceDir ||
+				IsSourceDirection(tile.direction, sourceDir, allowBidiSource, true, gap))
+			{
+				gap = 0;
 				continue;
 			}
 			if (IsTargetDirection(tile.direction, targetDir, allowBidiTarget))
@@ -367,13 +621,20 @@ namespace
 		return false;
 	}
 
-	BandCollection BuildSourceBands(const EdgeScan& scannedTiles, const PathDir sourceDir, const int32_t minOffset, const int32_t maxOffset)
+	BandCollection BuildSourceBands(
+		const EdgeScan& scannedTiles,
+		const PathDir sourceDir,
+		const bool allowBidiSource,
+		const int32_t minOffset,
+		const int32_t maxOffset)
 	{
 		BandCollection result;
 		for (int32_t offset = minOffset; offset <= maxOffset; ++offset)
 		{
 			const EdgeTile& tile = GetScannedTile(scannedTiles, offset);
-			if (tile.valid && tile.isEligibleNc && tile.direction == sourceDir)
+			if (tile.valid &&
+				tile.isEligibleNc &&
+				IsSourceDirection(tile.direction, sourceDir, allowBidiSource, false, 0))
 			{
 				result.Add(tile);
 			}
@@ -451,12 +712,21 @@ namespace
 	}
 
 	bool TryFindPairedReturnTile(void* const pTrafficSim, const int32_t originX, const int32_t originZ,
-		const int32_t stepX, const int32_t stepZ, const uint16_t eligibleNcMask, const bool allowBidiTarget,
-		int32_t& resultX, int32_t& resultZ)
+		const int32_t stepX, const int32_t stepZ, const uint16_t eligibleNcMask,
+		const bool allowBidiSource, const bool allowBidiTarget,
+		const PairingDiagnostics& diagnostics, int32_t& resultX, int32_t& resultZ)
 	{
 		if ((stepX == 0 && stepZ == 0) || (stepX != 0 && stepZ != 0))
 		{
-			return false;
+			return LogPairingFailureWithoutScan(
+				diagnostics,
+				originX,
+				originZ,
+				stepX,
+				stepZ,
+				eligibleNcMask,
+				allowBidiTarget,
+				"invalid edge scan step");
 		}
 
 		EdgeScan scannedTiles{};
@@ -477,34 +747,71 @@ namespace
 		}
 
 		const EdgeTile& origin = GetScannedTile(scannedTiles, 0);
-		if (!IsOneWayDirection(origin.direction))
+		auto fail = [&](const char* const reason, const int32_t targetStart = 0, const size_t sourceBandCount = 0, const size_t targetBandCount = 0)
 		{
+			LogPairingDiagnostics(
+				diagnostics,
+				scannedTiles,
+				originX,
+				originZ,
+				stepX,
+				stepZ,
+				eligibleNcMask,
+				allowBidiTarget,
+				false,
+				reason,
+				targetStart,
+				sourceBandCount,
+				targetBandCount,
+				originX,
+				originZ);
 			return false;
+		};
+
+		PathDir sourceDirection = PathDir::None;
+		if (!TryFindSourceDirectionNearOrigin(
+			scannedTiles,
+			origin.direction,
+			allowBidiSource,
+			sourceDirection))
+		{
+			return fail("source direction unresolved");
 		}
 
-		const PathDir targetDirection = GetOppositeDirection(origin.direction);
+		const PathDir targetDirection = GetOppositeDirection(sourceDirection);
 		int32_t targetStart = 0;
-		if (!FindTargetStart(scannedTiles,origin.direction, targetDirection, allowBidiTarget, targetStart))
+		if (!FindTargetStart(
+			scannedTiles,
+			sourceDirection,
+			targetDirection,
+			allowBidiSource,
+			allowBidiTarget,
+			targetStart))
 		{
-			return false;
+			return fail("no target start");
 		}
 
-		const auto negSourceExtent = FindSourceExtent(scannedTiles, origin.direction, -1);
-		const auto posSourceExtent = FindSourceExtent(scannedTiles, origin.direction, 1);
+		const auto negSourceExtent = FindSourceExtent(scannedTiles, sourceDirection, allowBidiSource, -1);
+		const auto posSourceExtent = FindSourceExtent(scannedTiles, sourceDirection, allowBidiSource, 1);
 		const auto maxOffset = std::min(posSourceExtent, targetStart - 1);
-		const auto sourceBands = BuildSourceBands(scannedTiles, origin.direction, negSourceExtent, maxOffset);
+		const auto sourceBands = BuildSourceBands(
+			scannedTiles,
+			sourceDirection,
+			allowBidiSource,
+			negSourceExtent,
+			maxOffset);
 		const auto targetBands = BuildTargetBands(scannedTiles, targetDirection, allowBidiTarget, targetStart);
 
 		if (sourceBands.bandCount == 0 || targetBands.bandCount == 0)
 		{
-			return false;
+			return fail("empty source or target bands", targetStart, sourceBands.bandCount, targetBands.bandCount);
 		}
 
 		size_t sourceBandIndex = 0;
 		size_t sourceTileIndex = 0;
 		if (!FindTileInBands(sourceBands, 0, sourceBandIndex, sourceTileIndex))
 		{
-			return false;
+			return fail("origin missing from source bands", targetStart, sourceBands.bandCount, targetBands.bandCount);
 		}
 
 		// Source bands and lanes are indexed from the target-facing side. Target
@@ -519,6 +826,22 @@ namespace
 
 		resultX = result.x;
 		resultZ = result.z;
+		LogPairingDiagnostics(
+			diagnostics,
+			scannedTiles,
+			originX,
+			originZ,
+			stepX,
+			stepZ,
+			eligibleNcMask,
+			allowBidiTarget,
+			true,
+			"paired",
+			targetStart,
+			sourceBands.bandCount,
+			targetBands.bandCount,
+			resultX,
+			resultZ);
 		return true;
 	}
 
@@ -586,7 +909,14 @@ namespace
 		}
 
 		const uint16_t eligibleNeighborConnectionMask = useRHWPairing ? kDirtRoadNcMask : kRoadNcMask;
-		const bool allowBidirectionalTarget = useNWMPairing;
+		const bool useOWRPairing = useRHWPairing && (originMask & kOWRMetadataNcMask) != 0;
+		const bool allowBidirectionalSource = useOWRPairing;
+		const bool allowBidirectionalTarget = useOWRPairing || useNWMPairing;
+		PairingDiagnostics diagnostics;
+		diagnostics.mode = useOWRPairing ? "OWR" : (useRHWPairing ? "DirtRoad/RHW" : "NWM/Road");
+		diagnostics.originMask = originMask;
+		diagnostics.reverseSearch = reverseSearch;
+		diagnostics.fallbackPass = false;
 		bool paired = TryFindPairedReturnTile(
 			pTrafficSim,
 			originX,
@@ -594,12 +924,15 @@ namespace
 			stepX,
 			stepZ,
 			eligibleNeighborConnectionMask,
+			allowBidirectionalSource,
 			allowBidirectionalTarget,
+			diagnostics,
 			*pX,
 			*pZ);
 
 		if (!paired && useNWMPairing)
 		{
+			diagnostics.fallbackPass = true;
 			paired = TryFindPairedReturnTile(
 				pTrafficSim,
 				originX,
@@ -607,7 +940,9 @@ namespace
 				-stepX,
 				-stepZ,
 				eligibleNeighborConnectionMask,
+				allowBidirectionalSource,
 				allowBidirectionalTarget,
+				diagnostics,
 				*pX,
 				*pZ);
 		}
@@ -626,6 +961,7 @@ void NeighborConnections::Install(const Options& options)
 	gEnableNWM = options.enableNWM;
 	gMaxSearchDistance = std::clamp(options.maxSearchDistance, kMinSearchDistance, kMaxSearchDistance);
 	gMaxGroupingGap = std::min(options.maxGroupingGap, kMaxGroupingGap);
+	gDiagnosticLogCount = 0;
 
 	Patching::RedirectCall(kForwardPathFindReturnTileCallAddress, kFindHighwayReturnTileAddress, reinterpret_cast<void (*)()>(FindReturnTile));
 	Patching::RedirectCall(kReturnPathFindReturnTileCallAddress, kFindHighwayReturnTileAddress, reinterpret_cast<void (*)()>(FindReturnTile));
