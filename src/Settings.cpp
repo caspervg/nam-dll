@@ -91,7 +91,8 @@ Settings::Settings() :
 	enableNetworkSlopePatch(true),
 	enableFlexPuzzlePiecePatch(true),
 	enableCommuteLoopPatch(true),
-	enableDirtRoadAccessPatch(false),
+	enableDirtRoadAccessPatch(true),
+	enableTransitAccessPatch(true),
 	enableNeighborConnectionPatch(false),
 	enableRHWNeighborConnections(false),
 	enableOWRNeighborConnections(false),
@@ -120,6 +121,7 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableFlexPuzzlePiecePatch", enableFlexPuzzlePiecePatch);
 			readBoolProp("EnableCommuteLoopPatch", enableCommuteLoopPatch);
 			readBoolProp("EnableDirtRoadAccessPatch", enableDirtRoadAccessPatch);
+			readBoolProp("EnableTransitAccessPatch", enableTransitAccessPatch);
 			readBoolProp("EnableNeighborConnectionPatch", enableNeighborConnectionPatch);
 
 			ReadNeighborConnectionNetworks(

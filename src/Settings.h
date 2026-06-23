@@ -17,6 +17,7 @@ public:
 	bool enableFlexPuzzlePiecePatch;
 	bool enableCommuteLoopPatch;
 	bool enableDirtRoadAccessPatch;
+	bool enableTransitAccessPatch;
 	bool enableNeighborConnectionPatch;
 	bool enableRHWNeighborConnections;
 	bool enableOWRNeighborConnections;
