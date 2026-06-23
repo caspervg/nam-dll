@@ -19,5 +19,7 @@ public:
 	bool enableDirtRoadAccessPatch;
 	bool enableRHWNeighborConnectionPatch;
 	uint32_t rhwNeighborConnectionMaxSearchDistance;
+	uint32_t rhwNeighborConnectionMaxGroupingGap;
+	bool enableRHWNeighborConnectionDebugLogging;
 	bool enableKeyboardShortcuts;
 };

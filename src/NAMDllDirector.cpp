@@ -198,7 +198,10 @@ noMatchingTunnelNetwork:
 			"RHW Neighbor Connection patch",
 			[&settings]()
 			{
-				RHWNeighborConnections::Install(settings.rhwNeighborConnectionMaxSearchDistance);
+				RHWNeighborConnections::Install(
+					settings.rhwNeighborConnectionMaxSearchDistance,
+					settings.rhwNeighborConnectionMaxGroupingGap,
+					settings.enableRHWNeighborConnectionDebugLogging);
 			});
 	}
 }
