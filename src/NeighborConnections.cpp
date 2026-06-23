@@ -6,6 +6,64 @@
 #include <cstddef>
 #include <cstdint>
 
+/*
+	Neighbor connection patch
+	=========================
+
+	SimCity 4 has special return-tile handling for divided networks such as
+	Avenue and Highway. When a path crosses a city edge, the game pairs the
+	visible NC connection with a nearby tile carrying traffic in the
+	opposite direction:
+
+	    city edge
+	    v
+	    S S S . . T T T
+	    ^ source  ^ target return carriageway
+
+	This patch reuses that divided-network path for more networks:
+
+	- RHW/DirtRoad: adds the DirtRoad neighbor connection bit to the game's
+	  divided-network mask.
+
+	- OWR: changes OWR's neighbor connection type from "none" to the same
+	  DirtRoad/RHW type. Because of that, enabling OWR necessarily also
+	  enables the RHW part of this patch.
+
+	- NWM: adds Road to the divided-network mask, but only uses the custom
+	  return search when the Road edge tile is clearly one-way (i.e. half of a AVE-6).
+	  Normal Road neighbor connections are bidirectional, so they are left alone.
+
+	Return-tile matching
+	--------------------
+
+	The hook receives the tile being checked at the city edge. For RHW/OWR it
+    first asks the original game function for the adjacent tile direction. For NWM
+    it scans along the city edge directly. NWM pieces are Road overrides, so the
+    Road neighbor connection alone does not tell us which side of the source tile
+    contains the matching carriageway. The search therefore tries both directions
+    along the edge and accepts the first valid opposite-side match.
+
+	The scan reads a short strip of edge tiles:
+
+	    -8 ... -2 -1  0  1  2 ... 8
+	              [ source ] [ target ]
+
+	Tiles with the same traffic direction are grouped into bands. Empty tiles
+	inside a group are allowed up to NeighborConnectionMaxGroupingGap, which
+	lets separated carriageways and multi-tile NWM setups stay together.
+
+	The source band and lane are then mirrored onto the target side:
+
+	    source bands              target bands
+	    far -> near               near -> far
+	    [A][B][C]       maps to   [C][B][A]
+
+	Within the selected band, the same mirrored position is used. This keeps a
+	tile in a three-lane outgoing side paired with the corresponding tile in a
+	three-lane incoming side, while still handling unequal band widths by
+	scaling the index.
+*/
+
 namespace
 {
 	// cSC4TrafficSimulator::PerformPathSearch checks this mask before using the
@@ -46,32 +104,38 @@ namespace
 	auto const pFindHighwayReturnTile = reinterpret_cast<FindHighwayReturnTile>(kFindHighwayReturnTileAddress);
 	auto const pGetTrafficNeighborConnection = reinterpret_cast<GetTrafficNeighborConnection>(kGetTrafficNeighborConnectionAddress);
 
-	enum class PathDirection : uint8_t
+	// Traffic direction seen from the city edge for one path type.
+	enum class PathDir : uint8_t
 	{
 		None,
 		Inbound,
 		Outbound,
-		Bidirectional
+		Bidi // short for Bidirectional
 	};
 
+	// One scanned tile on the city edge, including its NC mask and path direction.
 	struct EdgeTile
 	{
 		int32_t x = 0;
 		int32_t z = 0;
 		int32_t offset = 0;
-		uint16_t neighborConnectionMask = 0;
+		uint16_t ncMask = 0;
 		uint16_t pathMatrix = 0;
-		PathDirection direction = PathDirection::None;
+		PathDir direction = PathDir::None;
 		bool valid = false;
-		bool isEligibleNeighborConnection = false;
+		bool isEligibleNc = false;
 	};
 
+	using EdgeScan = std::array<EdgeTile, kScanCapacity>;
+
+	// A contiguous run of scanned tiles that belong to the same carriageway group.
 	struct Band
 	{
 		size_t firstTile = 0;
 		size_t tileCount = 0;
 	};
 
+	// The grouped source or target side used when mirroring a return tile.
 	struct BandCollection
 	{
 		std::array<EdgeTile, kScanCapacity> tiles{};
@@ -114,6 +178,7 @@ namespace
 		return *reinterpret_cast<const int32_t*>(bytes + offset);
 	}
 
+	// Converts the outside neighbor coordinate to the city-edge cell and edge index.
 	bool TryGetBoundaryCellAndEdge(void* const pTrafficSim, const int32_t x, const int32_t z, int32_t& cellX, int32_t& cellZ, uint32_t& edge)
 	{
 		const int32_t maxX = ReadSimulatorInt32(pTrafficSim, kMaxXOffset);
@@ -151,21 +216,21 @@ namespace
 		return cellX >= 0 && cellX <= maxX && cellZ >= 0 && cellZ <= maxZ;
 	}
 
-	PathDirection GetPathDirection(void* const pTrafficSim, const int32_t x, const int32_t z, uint16_t& pathMatrix)
+	PathDir GetPathDirection(void* const pTrafficSim, const int32_t x, const int32_t z, uint16_t& pathMatrix)
 	{
 		int32_t cellX = 0;
 		int32_t cellZ = 0;
 		uint32_t boundaryEdge = 0;
 		if (!TryGetBoundaryCellAndEdge(pTrafficSim, x, z, cellX, cellZ, boundaryEdge))
 		{
-			return PathDirection::None;
+			return PathDir::None;
 		}
 
 		const auto* const simulatorBytes = static_cast<const uint8_t*>(pTrafficSim);
 		const auto* const pathCellData = *reinterpret_cast<const uint8_t* const*>(simulatorBytes + kPathCellDataOffset);
 		if (!pathCellData)
 		{
-			return PathDirection::None;
+			return PathDir::None;
 		}
 
 		const uint32_t cellIndex = (static_cast<uint32_t>(cellX) << 8) | static_cast<uint32_t>(cellZ);
@@ -183,32 +248,32 @@ namespace
 
 		if (inbound && outbound)
 		{
-			return PathDirection::Bidirectional;
+			return PathDir::Bidi;
 		}
 		if (inbound)
 		{
-			return PathDirection::Inbound;
+			return PathDir::Inbound;
 		}
 		if (outbound)
 		{
-			return PathDirection::Outbound;
+			return PathDir::Outbound;
 		}
-		return PathDirection::None;
+		return PathDir::None;
 	}
 
-	PathDirection GetOppositeDirection(const PathDirection dir)
+	PathDir GetOppositeDirection(const PathDir dir)
 	{
-		return dir == PathDirection::Inbound ? PathDirection::Outbound : PathDirection::Inbound;
+		return dir == PathDir::Inbound ? PathDir::Outbound : PathDir::Inbound;
 	}
 
-	bool IsOneWayDirection(const PathDirection dir)
+	bool IsOneWayDirection(const PathDir dir)
 	{
-		return dir == PathDirection::Inbound || dir == PathDirection::Outbound;
+		return dir == PathDir::Inbound || dir == PathDir::Outbound;
 	}
 
-	bool IsTargetDirection(const PathDirection dir, const PathDirection targetDir, const bool allowBidiFallback)
+	bool IsTargetDirection(const PathDir dir, const PathDir targetDir, const bool allowBidiFallback)
 	{
-		return dir == targetDir || (allowBidiFallback && dir == PathDirection::Bidirectional);
+		return dir == targetDir || (allowBidiFallback && dir == PathDir::Bidi);
 	}
 
 	EdgeTile ReadEdgeTile(void* const pTrafficSim, const int32_t originX, const int32_t originZ,
@@ -228,19 +293,19 @@ namespace
 			return tile;
 		}
 
-		tile.neighborConnectionMask = GetNeighborConnectionMask(pTrafficSim, tile.x, tile.z);
-		tile.isEligibleNeighborConnection = (tile.neighborConnectionMask & eligibleNcMask) != 0;
+		tile.ncMask = GetNeighborConnectionMask(pTrafficSim, tile.x, tile.z);
+		tile.isEligibleNc = (tile.ncMask & eligibleNcMask) != 0;
 		tile.direction = GetPathDirection(pTrafficSim, tile.x, tile.z, tile.pathMatrix);
 		return tile;
 	}
 
-	const EdgeTile& GetScannedTile(const std::array<EdgeTile, kScanCapacity>& scannedTiles, const int32_t offset)
+	const EdgeTile& GetScannedTile(const EdgeScan& scannedTiles, const int32_t offset)
 	{
 		return scannedTiles[static_cast<size_t>(offset + static_cast<int32_t>(kMaxSearchDistance))];
 	}
 
-	int32_t FindSourceExtent(const std::array<EdgeTile, kScanCapacity>& scannedTiles,
-		                     const PathDirection sourceDir, const int32_t inc)
+	// Finds how far the source carriageway continues from the origin, allowing small gaps.
+	int32_t FindSourceExtent(const EdgeScan& scannedTiles, const PathDir sourceDir, const int32_t inc)
 	{
 		int32_t extent = 0;
 		uint32_t gap = 0;
@@ -255,7 +320,7 @@ namespace
 				break;
 			}
 
-			if (!tile.isEligibleNeighborConnection)
+			if (!tile.isEligibleNc)
 			{
 				if (++gap > gMaxGroupingGap)
 				{
@@ -275,11 +340,8 @@ namespace
 		return extent;
 	}
 
-	bool FindTargetStart(const std::array<EdgeTile, kScanCapacity>& scannedTiles,
-		const PathDirection sourceDir,
-		const PathDirection targetDir,
-		const bool allowBidiTarget,
-		int32_t& targetStart)
+	// Finds the first tile after the source side that can act as the return side.
+	bool FindTargetStart(const EdgeScan& scannedTiles, const PathDir sourceDir, const PathDir targetDir, const bool allowBidiTarget, int32_t& targetStart)
 	{
 		for (int32_t offset = 1;
 			offset <= static_cast<int32_t>(gMaxSearchDistance);
@@ -290,7 +352,7 @@ namespace
 			{
 				break;
 			}
-			if (!tile.isEligibleNeighborConnection || tile.direction == sourceDir)
+			if (!tile.isEligibleNc || tile.direction == sourceDir)
 			{
 				continue;
 			}
@@ -305,17 +367,13 @@ namespace
 		return false;
 	}
 
-	BandCollection BuildSourceBands(
-		const std::array<EdgeTile, kScanCapacity>& scannedTiles,
-		const PathDirection sourceDir,
-		const int32_t minOffset,
-		const int32_t maxOffset)
+	BandCollection BuildSourceBands(const EdgeScan& scannedTiles, const PathDir sourceDir, const int32_t minOffset, const int32_t maxOffset)
 	{
 		BandCollection result;
 		for (int32_t offset = minOffset; offset <= maxOffset; ++offset)
 		{
 			const EdgeTile& tile = GetScannedTile(scannedTiles, offset);
-			if (tile.valid && tile.isEligibleNeighborConnection && tile.direction == sourceDir)
+			if (tile.valid && tile.isEligibleNc && tile.direction == sourceDir)
 			{
 				result.Add(tile);
 			}
@@ -323,11 +381,7 @@ namespace
 		return result;
 	}
 
-	BandCollection BuildTargetBands(
-		const std::array<EdgeTile, kScanCapacity>& scannedTiles,
-		const PathDirection targetDir,
-		const bool allowBidiTarget,
-		const int32_t targetStart)
+	BandCollection BuildTargetBands(const EdgeScan& scannedTiles, const PathDir targetDir, const bool allowBidiTarget, const int32_t targetStart)
 	{
 		BandCollection result;
 		uint32_t gap = 0;
@@ -341,7 +395,7 @@ namespace
 				break;
 			}
 
-			if (!tile.isEligibleNeighborConnection)
+			if (!tile.isEligibleNc)
 			{
 				if (++gap > gMaxGroupingGap)
 				{
@@ -380,6 +434,7 @@ namespace
 		return false;
 	}
 
+	// Returns the one-tile step along the current city edge.
 	bool TryGetEdgeScanStep(void* const pTrafficSim, const int32_t x, const int32_t z, int32_t& stepX, int32_t& stepZ)
 	{
 		int32_t cellX = 0;
@@ -395,23 +450,16 @@ namespace
 		return true;
 	}
 
-	bool TryFindPairedReturnTile(
-		void* const pTrafficSim,
-		const int32_t originX,
-		const int32_t originZ,
-		const int32_t stepX,
-		const int32_t stepZ,
-		const uint16_t eligibleNcMask,
-		const bool allowBidiTarget,
-		int32_t& resultX,
-		int32_t& resultZ)
+	bool TryFindPairedReturnTile(void* const pTrafficSim, const int32_t originX, const int32_t originZ,
+		const int32_t stepX, const int32_t stepZ, const uint16_t eligibleNcMask, const bool allowBidiTarget,
+		int32_t& resultX, int32_t& resultZ)
 	{
 		if ((stepX == 0 && stepZ == 0) || (stepX != 0 && stepZ != 0))
 		{
 			return false;
 		}
 
-		std::array<EdgeTile, kScanCapacity> scannedTiles{};
+		EdgeScan scannedTiles{};
 		for (int32_t offset = -static_cast<int32_t>(gMaxSearchDistance);
 			offset <= static_cast<int32_t>(gMaxSearchDistance);
 			++offset)
@@ -434,7 +482,7 @@ namespace
 			return false;
 		}
 
-		const PathDirection targetDirection = GetOppositeDirection(origin.direction);
+		const PathDir targetDirection = GetOppositeDirection(origin.direction);
 		int32_t targetStart = 0;
 		if (!FindTargetStart(scannedTiles,origin.direction, targetDirection, allowBidiTarget, targetStart))
 		{
@@ -461,24 +509,20 @@ namespace
 
 		// Source bands and lanes are indexed from the target-facing side. Target
 		// bands and lanes are already stored from the source-facing side.
-		const size_t facingSourceBandIndex =
-			sourceBands.bandCount - sourceBandIndex - 1;
-		const size_t targetBandIndex =
-			facingSourceBandIndex * targetBands.bandCount / sourceBands.bandCount;
+		const size_t facingSourceBandIndex = sourceBands.bandCount - sourceBandIndex - 1;
+		const size_t targetBandIndex = facingSourceBandIndex * targetBands.bandCount / sourceBands.bandCount;
 		const Band& sourceBand = sourceBands.bands[sourceBandIndex];
 		const Band& targetBand = targetBands.bands[targetBandIndex];
-		const size_t facingSourceTileIndex =
-			sourceBand.tileCount - sourceTileIndex - 1;
-		const size_t targetTileIndex =
-			facingSourceTileIndex * targetBand.tileCount / sourceBand.tileCount;
-		const EdgeTile& result =
-			targetBands.tiles[targetBand.firstTile + targetTileIndex];
+		const size_t facingSourceTileIndex = sourceBand.tileCount - sourceTileIndex - 1;
+		const size_t targetTileIndex = facingSourceTileIndex * targetBand.tileCount / sourceBand.tileCount;
+		const EdgeTile& result = targetBands.tiles[targetBand.firstTile + targetTileIndex];
 
 		resultX = result.x;
 		resultZ = result.z;
 		return true;
 	}
 
+	// Road NCs are broad. Only one-way Road edge tiles should enter the NWM search.
 	bool IsOneWayRoadConnection(void* const pTrafficSim, const int32_t originX, const int32_t originZ, const uint16_t originMask)
 	{
 		if (!gEnableNWM ||
@@ -518,6 +562,7 @@ namespace
 
 		if (!useRHWPairing && !useNWMPairing)
 		{
+			// Road was added to the mask for NWM, but ordinary Road NCs must stay unchanged.
 			if ((originMask & kRoadNcMask) == 0)
 			{
 				pFindHighwayReturnTile(pTrafficSim, pX, pZ, reverseSearch);
@@ -540,8 +585,7 @@ namespace
 			return;
 		}
 
-		const uint16_t eligibleNeighborConnectionMask =
-			useRHWPairing ? kDirtRoadNcMask : kRoadNcMask;
+		const uint16_t eligibleNeighborConnectionMask = useRHWPairing ? kDirtRoadNcMask : kRoadNcMask;
 		const bool allowBidirectionalTarget = useNWMPairing;
 		bool paired = TryFindPairedReturnTile(
 			pTrafficSim,

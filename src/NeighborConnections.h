@@ -3,6 +3,7 @@
 
 namespace NeighborConnections
 {
+	// User-facing settings for the neighbor connection patch.
 	struct Options
 	{
 		uint32_t maxSearchDistance = 8;
