@@ -3,10 +3,14 @@
 
 namespace RHWNeighborConnections
 {
-	void Install(
-		uint32_t maxSearchDistance,
-		uint32_t maxGroupingGap,
-		bool enableOWRNeighborConnectionSubpatch,
-		bool enableNWMNeighborConnectionSubpatch,
-		bool enableDebugLogging);
+	struct Options
+	{
+		uint32_t maxSearchDistance = 8;
+		uint32_t maxGroupingGap = 2;
+		bool enableRHW = false;
+		bool enableOWR = false;
+		bool enableNWM = false;
+	};
+
+	void Install(const Options& options);
 }

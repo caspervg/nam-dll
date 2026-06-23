@@ -17,11 +17,11 @@ public:
 	bool enableFlexPuzzlePiecePatch;
 	bool enableCommuteLoopPatch;
 	bool enableDirtRoadAccessPatch;
-	bool enableRHWNeighborConnectionPatch;
-	bool enableOWRNeighborConnectionSubpatch;
-	bool enableNWMNeighborConnectionSubpatch;
-	uint32_t rhwNeighborConnectionMaxSearchDistance;
-	uint32_t rhwNeighborConnectionMaxGroupingGap;
-	bool enableRHWNeighborConnectionDebugLogging;
+	bool enableNeighborConnectionPatch;
+	bool enableRHWNeighborConnections;
+	bool enableOWRNeighborConnections;
+	bool enableNWMNeighborConnections;
+	uint32_t neighborConnectionMaxSearchDistance;
+	uint32_t neighborConnectionMaxGroupingGap;
 	bool enableKeyboardShortcuts;
 };

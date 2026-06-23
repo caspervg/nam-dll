@@ -2,6 +2,86 @@
 #include "Logger.h"
 #include "mini/ini.h"
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+
+namespace
+{
+	std::string Trim(std::string value)
+	{
+		auto isSpace = [](const unsigned char ch)
+		{
+			return std::isspace(ch) != 0;
+		};
+
+		value.erase(
+			value.begin(),
+			std::find_if_not(value.begin(), value.end(), isSpace));
+		value.erase(
+			std::find_if_not(value.rbegin(), value.rend(), isSpace).base(),
+			value.end());
+		return value;
+	}
+
+	std::string ToUpper(std::string value)
+	{
+		std::transform(
+			value.begin(),
+			value.end(),
+			value.begin(),
+			[](const unsigned char ch)
+			{
+				return static_cast<char>(std::toupper(ch));
+			});
+		return value;
+	}
+
+	void ReadNeighborConnectionNetworks(
+		const std::string& networkList,
+		bool& enableRHW,
+		bool& enableOWR,
+		bool& enableNWM)
+	{
+		enableRHW = false;
+		enableOWR = false;
+		enableNWM = false;
+
+		size_t tokenStart = 0;
+		while (tokenStart <= networkList.size())
+		{
+			const size_t tokenEnd = networkList.find(',', tokenStart);
+			const std::string token = ToUpper(Trim(networkList.substr(
+				tokenStart,
+				tokenEnd == std::string::npos ? std::string::npos : tokenEnd - tokenStart)));
+
+			if (token == "RHW")
+			{
+				enableRHW = true;
+			}
+			else if (token == "OWR")
+			{
+				enableOWR = true;
+			}
+			else if (token == "NWM")
+			{
+				enableNWM = true;
+			}
+
+			if (tokenEnd == std::string::npos)
+			{
+				break;
+			}
+			tokenStart = tokenEnd + 1;
+		}
+
+		if (enableOWR)
+		{
+			enableRHW = true;
+		}
+	}
+}
+
 Settings::Settings() :
 	enableDiagonalStreets(true),
 	disableAutoconnect(true),
@@ -12,12 +92,12 @@ Settings::Settings() :
 	enableFlexPuzzlePiecePatch(true),
 	enableCommuteLoopPatch(true),
 	enableDirtRoadAccessPatch(false),
-	enableRHWNeighborConnectionPatch(false),
-	enableOWRNeighborConnectionSubpatch(false),
-	enableNWMNeighborConnectionSubpatch(false),
-	rhwNeighborConnectionMaxSearchDistance(8),
-	rhwNeighborConnectionMaxGroupingGap(2),
-	enableRHWNeighborConnectionDebugLogging(false),
+	enableNeighborConnectionPatch(false),
+	enableRHWNeighborConnections(false),
+	enableOWRNeighborConnections(false),
+	enableNWMNeighborConnections(false),
+	neighborConnectionMaxSearchDistance(8),
+	neighborConnectionMaxGroupingGap(2),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -40,29 +120,26 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableFlexPuzzlePiecePatch", enableFlexPuzzlePiecePatch);
 			readBoolProp("EnableCommuteLoopPatch", enableCommuteLoopPatch);
 			readBoolProp("EnableDirtRoadAccessPatch", enableDirtRoadAccessPatch);
-			readBoolProp("EnableRHWNeighborConnectionPatch", enableRHWNeighborConnectionPatch);
-			readBoolProp(
-				"EnableOWRNeighborConnectionSubpatch",
-				enableOWRNeighborConnectionSubpatch);
-			readBoolProp(
-				"EnableNWMNeighborConnectionSubpatch",
-				enableNWMNeighborConnectionSubpatch);
-			readBoolProp(
-				"EnableRHWNeighborConnectionDebugLogging",
-				enableRHWNeighborConnectionDebugLogging);
+			readBoolProp("EnableNeighborConnectionPatch", enableNeighborConnectionPatch);
+
+			ReadNeighborConnectionNetworks(
+				ini.get("NAM").get("NeighborConnectionNetworks"),
+				enableRHWNeighborConnections,
+				enableOWRNeighborConnections,
+				enableNWMNeighborConnections);
 
 			const std::string maxSearchDistance =
-				ini.get("NAM").get("RHWNeighborConnectionMaxSearchDistance");
+				ini.get("NAM").get("NeighborConnectionMaxSearchDistance");
 			if (!maxSearchDistance.empty())
 			{
-				rhwNeighborConnectionMaxSearchDistance = std::stoul(maxSearchDistance);
+				neighborConnectionMaxSearchDistance = std::stoul(maxSearchDistance);
 			}
 
 			const std::string maxGroupingGap =
-				ini.get("NAM").get("RHWNeighborConnectionMaxGroupingGap");
+				ini.get("NAM").get("NeighborConnectionMaxGroupingGap");
 			if (!maxGroupingGap.empty())
 			{
-				rhwNeighborConnectionMaxGroupingGap = std::stoul(maxGroupingGap);
+				neighborConnectionMaxGroupingGap = std::stoul(maxGroupingGap);
 			}
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");

@@ -1,5 +1,4 @@
 #include "RHWNeighborConnections.h"
-#include "Logger.h"
 #include "Patching.h"
 
 #include <algorithm>
@@ -22,8 +21,6 @@ namespace
 	constexpr uint16_t kVanillaDividedNetworkConnectionMask = 0x1108;
 	constexpr uint16_t kRoadNeighborConnectionMask = 0x0004;
 	constexpr uint16_t kDirtRoadNeighborConnectionMask = 0x0400;
-	constexpr uint16_t kRHWDividedNetworkConnectionMask =
-		kVanillaDividedNetworkConnectionMask | kDirtRoadNeighborConnectionMask;
 	constexpr uint32_t kNoNeighborConnectionType = 0;
 	constexpr uint32_t kDirtRoadNeighborConnectionType = 10;
 
@@ -38,12 +35,10 @@ namespace
 	constexpr uint32_t kMaximumSearchDistance = 64;
 	constexpr uint32_t kMaximumGroupingGap = 16;
 	constexpr size_t kScanCapacity = kMaximumSearchDistance * 2 + 1;
-	constexpr uint32_t kMaximumDebugLogEntries = 256;
 
 	uint32_t g_maxSearchDistance = kMinimumSearchDistance;
 	uint32_t g_maxGroupingGap = 0;
-	uint32_t g_remainingDebugLogEntries = 0;
-	bool g_enableNWMNeighborConnectionSubpatch = false;
+	bool g_enableNWMNeighborConnections = false;
 
 	using FindHighwayReturnTile = void (__thiscall*)(
 		void* pTrafficSimulator,
@@ -104,6 +99,10 @@ namespace
 				tileCount == 0 || tiles[tileCount - 1].offset + 1 != tile.offset;
 			if (startsNewBand)
 			{
+				if (bandCount >= bands.size())
+				{
+					return;
+				}
 				bands[bandCount++] = Band{tileCount, 0};
 			}
 
@@ -246,77 +245,6 @@ namespace
 			(allowBidirectionalTarget && direction == PathDirection::Bidirectional);
 	}
 
-	const char* GetDirectionName(const PathDirection direction)
-	{
-		switch (direction)
-		{
-		case PathDirection::Inbound:
-			return "inbound";
-		case PathDirection::Outbound:
-			return "outbound";
-		case PathDirection::Bidirectional:
-			return "bidirectional";
-		default:
-			return "none";
-		}
-	}
-
-	void WriteDebugLog(
-		const EdgeTile& origin,
-		const int32_t resultX,
-		const int32_t resultZ,
-		const size_t sourceBandCount,
-		const size_t targetBandCount,
-		const char* const outcome)
-	{
-		if (g_remainingDebugLogEntries == 0)
-		{
-			return;
-		}
-
-		--g_remainingDebugLogEntries;
-		Logger::GetInstance().WriteLineFormatted(
-			LogLevel::Error,
-			"[RHW neighbor debug] origin=(%d,%d) matrix=0x%04X direction=%s result=(%d,%d) "
-			"sourceBands=%u targetBands=%u outcome=%s",
-			origin.x,
-			origin.z,
-			origin.pathMatrix,
-			GetDirectionName(origin.direction),
-			resultX,
-			resultZ,
-			static_cast<uint32_t>(sourceBandCount),
-			static_cast<uint32_t>(targetBandCount),
-			outcome);
-	}
-
-	void WriteScanDebugLog(
-		const EdgeTile& tile,
-		const uint16_t eligibleNeighborConnectionMask,
-		const char* const passName)
-	{
-		if (g_remainingDebugLogEntries == 0)
-		{
-			return;
-		}
-
-		--g_remainingDebugLogEntries;
-		Logger::GetInstance().WriteLineFormatted(
-			LogLevel::Error,
-			"[RHW neighbor scan] pass=%s offset=%d tile=(%d,%d) valid=%u mask=0x%04X "
-			"eligibleMask=0x%04X eligible=%u matrix=0x%04X direction=%s",
-			passName,
-			tile.offset,
-			tile.x,
-			tile.z,
-			tile.valid ? 1u : 0u,
-			tile.neighborConnectionMask,
-			eligibleNeighborConnectionMask,
-			tile.isEligibleNeighborConnection ? 1u : 0u,
-			tile.pathMatrix,
-			GetDirectionName(tile.direction));
-	}
-
 	EdgeTile ReadEdgeTile(
 		void* const pTrafficSimulator,
 		const int32_t originX,
@@ -430,10 +358,6 @@ namespace
 				return true;
 			}
 
-			// An unclassified tile is a corridor boundary, not something that
-			// should be searched through. Bidirectional targets are only allowed
-			// for Road/NWM where widened-network edge tiles can expose both
-			// boundary directions on the return carriageway.
 			break;
 		}
 		return false;
@@ -545,22 +469,12 @@ namespace
 		const int32_t stepX,
 		const int32_t stepZ,
 		const uint16_t eligibleNeighborConnectionMask,
-		const bool enableScanDebugLogging,
 		const bool allowBidirectionalTarget,
-		const char* const passName,
 		int32_t& resultX,
-		int32_t& resultZ,
-		EdgeTile& origin,
-		size_t& sourceBandCount,
-		size_t& targetBandCount,
-		const char*& outcome)
+		int32_t& resultZ)
 	{
-		sourceBandCount = 0;
-		targetBandCount = 0;
-
 		if ((stepX == 0 && stepZ == 0) || (stepX != 0 && stepZ != 0))
 		{
-			outcome = "invalid-scan-step";
 			return false;
 		}
 
@@ -580,23 +494,10 @@ namespace
 					eligibleNeighborConnectionMask,
 					offset);
 		}
-		if (enableScanDebugLogging)
-		{
-			for (int32_t offset = -static_cast<int32_t>(g_maxSearchDistance);
-				offset <= static_cast<int32_t>(g_maxSearchDistance);
-				++offset)
-			{
-				WriteScanDebugLog(
-					GetScannedTile(scannedTiles, offset),
-					eligibleNeighborConnectionMask,
-					passName);
-			}
-		}
 
-		origin = GetScannedTile(scannedTiles, 0);
+		const EdgeTile& origin = GetScannedTile(scannedTiles, 0);
 		if (!IsOneWayDirection(origin.direction))
 		{
-			outcome = "origin-not-one-way";
 			return false;
 		}
 
@@ -609,7 +510,6 @@ namespace
 			allowBidirectionalTarget,
 			targetStart))
 		{
-			outcome = "no-opposite-direction";
 			return false;
 		}
 
@@ -628,12 +528,9 @@ namespace
 				targetDirection,
 				allowBidirectionalTarget,
 				targetStart);
-		sourceBandCount = sourceBands.bandCount;
-		targetBandCount = targetBands.bandCount;
 
 		if (sourceBands.bandCount == 0 || targetBands.bandCount == 0)
 		{
-			outcome = "empty-band-group";
 			return false;
 		}
 
@@ -641,7 +538,6 @@ namespace
 		size_t sourceTileIndex = 0;
 		if (!FindTileInBands(sourceBands, 0, sourceBandIndex, sourceTileIndex))
 		{
-			outcome = "origin-not-in-source-band";
 			return false;
 		}
 
@@ -662,11 +558,48 @@ namespace
 
 		resultX = result.x;
 		resultZ = result.z;
-		outcome = "paired";
 		return true;
 	}
 
-	void __fastcall FindRHWReturnTile(
+	bool IsOneWayRoadConnection(
+		void* const pTrafficSimulator,
+		const int32_t originX,
+		const int32_t originZ,
+		const uint16_t originMask)
+	{
+		if (!g_enableNWMNeighborConnections ||
+			(originMask & kRoadNeighborConnectionMask) == 0 ||
+			(originMask & kVanillaDividedNetworkConnectionMask) != 0 ||
+			(originMask & kDirtRoadNeighborConnectionMask) != 0)
+		{
+			return false;
+		}
+
+		uint16_t pathMatrix = 0;
+		return IsOneWayDirection(GetPathDirection(
+			pTrafficSimulator,
+			originX,
+			originZ,
+			pathMatrix));
+	}
+
+	uint16_t BuildPatchedNeighborConnectionMask(
+		const bool enableRHW,
+		const bool enableNWM)
+	{
+		uint16_t mask = kVanillaDividedNetworkConnectionMask;
+		if (enableRHW)
+		{
+			mask |= kDirtRoadNeighborConnectionMask;
+		}
+		if (enableNWM)
+		{
+			mask |= kRoadNeighborConnectionMask;
+		}
+		return mask;
+	}
+
+	void __fastcall FindReturnTile(
 		void* const pTrafficSimulator,
 		void*,
 		int32_t* const pX,
@@ -676,22 +609,23 @@ namespace
 		const int32_t originX = *pX;
 		const int32_t originZ = *pZ;
 		const uint16_t originMask = GetNeighborConnectionMask(pTrafficSimulator, originX, originZ);
-		const bool isRHWConnection = (originMask & kDirtRoadNeighborConnectionMask) != 0;
-		const bool isNWMConnection =
-			g_enableNWMNeighborConnectionSubpatch &&
-			(originMask & kRoadNeighborConnectionMask) != 0 &&
-			(originMask & kVanillaDividedNetworkConnectionMask) == 0 &&
-			!isRHWConnection;
+		const bool useRHWPairing = (originMask & kDirtRoadNeighborConnectionMask) != 0;
+		const bool useNWMPairing =
+			!useRHWPairing &&
+			IsOneWayRoadConnection(pTrafficSimulator, originX, originZ, originMask);
 
-		if (!isRHWConnection && !isNWMConnection)
+		if (!useRHWPairing && !useNWMPairing)
 		{
-			pFindHighwayReturnTile(pTrafficSimulator, pX, pZ, reverseSearch);
+			if ((originMask & kRoadNeighborConnectionMask) == 0)
+			{
+				pFindHighwayReturnTile(pTrafficSimulator, pX, pZ, reverseSearch);
+			}
 			return;
 		}
 
 		int32_t stepX = 0;
 		int32_t stepZ = 0;
-		if (isRHWConnection)
+		if (useRHWPairing)
 		{
 			pFindHighwayReturnTile(pTrafficSimulator, pX, pZ, reverseSearch);
 			stepX = *pX - originX;
@@ -705,11 +639,8 @@ namespace
 		}
 
 		const uint16_t eligibleNeighborConnectionMask =
-			isRHWConnection ? kDirtRoadNeighborConnectionMask : kRoadNeighborConnectionMask;
-		EdgeTile origin;
-		size_t sourceBandCount = 0;
-		size_t targetBandCount = 0;
-		const char* outcome = "unmatched";
+			useRHWPairing ? kDirtRoadNeighborConnectionMask : kRoadNeighborConnectionMask;
+		const bool allowBidirectionalTarget = useNWMPairing;
 		bool paired = TryFindPairedReturnTile(
 			pTrafficSimulator,
 			originX,
@@ -717,94 +648,64 @@ namespace
 			stepX,
 			stepZ,
 			eligibleNeighborConnectionMask,
-			isNWMConnection,
-			isNWMConnection,
-			"primary",
+			allowBidirectionalTarget,
 			*pX,
-			*pZ,
-			origin,
-			sourceBandCount,
-			targetBandCount,
-			outcome);
-		if (!paired)
-		{
-			if (isNWMConnection && IsOneWayDirection(origin.direction))
-			{
-				paired = TryFindPairedReturnTile(
-					pTrafficSimulator,
-					originX,
-					originZ,
-					-stepX,
-					-stepZ,
-					eligibleNeighborConnectionMask,
-					true,
-					true,
-					"reverse",
-					*pX,
-					*pZ,
-					origin,
-					sourceBandCount,
-					targetBandCount,
-					outcome);
-			}
+			*pZ);
 
-			if (!paired)
-			{
-				*pX = originX;
-				*pZ = originZ;
-				WriteDebugLog(origin, *pX, *pZ, sourceBandCount, targetBandCount, outcome);
-				return;
-			}
+		if (!paired && useNWMPairing)
+		{
+			paired = TryFindPairedReturnTile(
+				pTrafficSimulator,
+				originX,
+				originZ,
+				-stepX,
+				-stepZ,
+				eligibleNeighborConnectionMask,
+				allowBidirectionalTarget,
+				*pX,
+				*pZ);
 		}
 
-		WriteDebugLog(
-			origin,
-			*pX,
-			*pZ,
-			sourceBandCount,
-			targetBandCount,
-			outcome);
+		if (!paired)
+		{
+			*pX = originX;
+			*pZ = originZ;
+		}
 	}
 }
 
-void RHWNeighborConnections::Install(
-	const uint32_t maxSearchDistance,
-	const uint32_t maxGroupingGap,
-	const bool enableOWRNeighborConnectionSubpatch,
-	const bool enableNWMNeighborConnectionSubpatch,
-	const bool enableDebugLogging)
+void RHWNeighborConnections::Install(const Options& options)
 {
-	g_enableNWMNeighborConnectionSubpatch = enableNWMNeighborConnectionSubpatch;
+	const bool enableRHW = options.enableRHW || options.enableOWR;
+	g_enableNWMNeighborConnections = options.enableNWM;
 	g_maxSearchDistance = std::clamp(
-		maxSearchDistance,
+		options.maxSearchDistance,
 		kMinimumSearchDistance,
 		kMaximumSearchDistance);
-	g_maxGroupingGap = std::min(maxGroupingGap, kMaximumGroupingGap);
-	g_remainingDebugLogEntries = enableDebugLogging ? kMaximumDebugLogEntries : 0;
+	g_maxGroupingGap = std::min(options.maxGroupingGap, kMaximumGroupingGap);
 
 	Patching::RedirectCall(
 		kForwardPathFindReturnTileCallAddress,
 		kFindHighwayReturnTileAddress,
-		reinterpret_cast<void (*)(void)>(FindRHWReturnTile));
+		reinterpret_cast<void (*)(void)>(FindReturnTile));
 	Patching::RedirectCall(
 		kReturnPathFindReturnTileCallAddress,
 		kFindHighwayReturnTileAddress,
-		reinterpret_cast<void (*)(void)>(FindRHWReturnTile));
+		reinterpret_cast<void (*)(void)>(FindReturnTile));
 
+	const uint16_t patchedMask = BuildPatchedNeighborConnectionMask(
+		enableRHW,
+		options.enableNWM);
 	Patching::PatchTestWordPtrEaxImmediate16(
 		kForwardPathNetworkMaskTestAddress,
 		kVanillaDividedNetworkConnectionMask,
-		enableNWMNeighborConnectionSubpatch
-			? static_cast<uint16_t>(kRHWDividedNetworkConnectionMask | kRoadNeighborConnectionMask)
-			: kRHWDividedNetworkConnectionMask);
+		patchedMask);
 	Patching::PatchTestWordPtrEaxImmediate16(
 		kReturnPathNetworkMaskTestAddress,
 		kVanillaDividedNetworkConnectionMask,
-		enableNWMNeighborConnectionSubpatch
-			? static_cast<uint16_t>(kRHWDividedNetworkConnectionMask | kRoadNeighborConnectionMask)
-			: kRHWDividedNetworkConnectionMask);
+		patchedMask);
 
-	if (enableOWRNeighborConnectionSubpatch)
+	if (options.enableOWR)
 	{
 		Patching::PatchImmediate32(
 			kOWRNetworkTypeToNeighborConnectionTypeAddress,
