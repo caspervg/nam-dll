@@ -552,6 +552,43 @@ namespace
 	DoTunnelChangedFn DoTunnelChanged = reinterpret_cast<DoTunnelChangedFn>(0x007140e0);
 	DoConnectionsChangedFn DoConnectionsChanged = reinterpret_cast<DoConnectionsChangedFn>(0x0071a860);
 
+	cISC4NetworkOccupant* InsertTunnelPieceWithStyle(
+		cSC4NetworkTool* tool,
+		uint8_t direction,
+		uint8_t sequenceIndex,
+		cSC4NetworkCellInfo* cellInfo,
+		const TunnelPortalStyles::Style& style)
+	{
+		if (style.useNativeExemplars)
+		{
+			return InsertTunnelPiece(tool, direction, sequenceIndex, cellInfo);
+		}
+		if (sequenceIndex >= style.tileCount
+			|| style.portalExemplarIds[sequenceIndex] == 0)
+		{
+			return nullptr;
+		}
+
+		// Windows 1.1.641 cSC4NetworkTool::InsertTunnelPiece (0x00628390)
+		// obtains the exemplar ID from the vector at cSC4NetworkTool + 0x2E4.
+		// Substituting one element around the native call preserves all native
+		// rotation, height, occupant, and path initialization behavior.
+		uint32_t* const exemplarIds =
+			*reinterpret_cast<uint32_t**>(
+				reinterpret_cast<uint8_t*>(tool) + 0x2E4);
+		if (!exemplarIds)
+		{
+			return nullptr;
+		}
+
+		const uint32_t nativeExemplarId = exemplarIds[sequenceIndex];
+		exemplarIds[sequenceIndex] = style.portalExemplarIds[sequenceIndex];
+		cISC4NetworkOccupant* const occupant =
+			InsertTunnelPiece(tool, direction, sequenceIndex, cellInfo);
+		exemplarIds[sequenceIndex] = nativeExemplarId;
+		return occupant;
+	}
+
 	struct CustomTunnelRouteEdgeFix
 	{
 		Endpoint first;
@@ -1604,20 +1641,32 @@ namespace
 			std::max(first.z, second.z));
 	}
 
-	bool PlacePortalPairInternal(const Endpoint& first, const Endpoint& second)
+	bool PlacePortalPairInternal(
+		const Endpoint& first,
+		const Endpoint& second,
+		const TunnelPortalStyles::Style& style)
 	{
 		Logger& logger = Logger::GetInstance();
 
 		logger.WriteLineFormatted(
 			LogLevel::Debug,
-			"TunnelPortalTool: attempting to place %s portal pair at (%u,%u) -> (%u,%u).",
+			"TunnelPortalTool: attempting to place %s portal pair at (%u,%u) -> (%u,%u), facade style=\"%s\".",
 			NetworkTypeNameInternal(first.networkType),
 			first.x, first.z,
-			second.x, second.z);
+			second.x, second.z,
+			style.name.c_str());
 
 		if (first.networkType != second.networkType)
 		{
 			logger.WriteLine(LogLevel::Error, "Tunnel portal endpoints must be on the same network type.");
+			return false;
+		}
+		if (style.networkType != first.networkType
+			|| style.tileCount != (IsTwoTileNetwork(first.networkType) ? 2 : 1))
+		{
+			logger.WriteLine(
+				LogLevel::Error,
+				"TunnelPortalTool: selected facade style is incompatible with the portal network or width.");
 			return false;
 		}
 
@@ -1689,20 +1738,22 @@ namespace
 			for (size_t i = 0; i < portalCellCount; ++i)
 			{
 				PrepareTunnelEndpointCell(firstPortalCells[i].cellInfo);
-				firstPortalCells[i].occupant = InsertTunnelPiece(
+				firstPortalCells[i].occupant = InsertTunnelPieceWithStyle(
 					tool,
 					firstDirection,
 					firstPortalCells[i].sequenceIndex,
-					firstPortalCells[i].cellInfo);
+					firstPortalCells[i].cellInfo,
+					style);
 			}
 			for (size_t i = 0; i < portalCellCount; ++i)
 			{
 				PrepareTunnelEndpointCell(secondPortalCells[i].cellInfo);
-				secondPortalCells[i].occupant = InsertTunnelPiece(
+				secondPortalCells[i].occupant = InsertTunnelPieceWithStyle(
 					tool,
 					secondDirection,
 					secondPortalCells[i].sequenceIndex,
-					secondPortalCells[i].cellInfo);
+					secondPortalCells[i].cellInfo,
+					style);
 			}
 		}
 
@@ -1883,9 +1934,18 @@ bool TunnelPortalToolPlacement::TryFindNetworkAtTile(
 	return TryFindNetworkAtTileInternal(x, z, networkTypeOut);
 }
 
-bool TunnelPortalToolPlacement::PlacePortalPair(const Endpoint& first, const Endpoint& second)
+uint8_t TunnelPortalToolPlacement::ExpectedPortalTileCount(
+	cISC4NetworkOccupant::eNetworkType networkType)
 {
-	return PlacePortalPairInternal(first, second);
+	return IsTwoTileNetwork(networkType) ? 2 : 1;
+}
+
+bool TunnelPortalToolPlacement::PlacePortalPair(
+	const Endpoint& first,
+	const Endpoint& second,
+	const TunnelPortalStyles::Style& style)
+{
+	return PlacePortalPairInternal(first, second, style);
 }
 
 void TunnelPortalTool::RefreshCity()

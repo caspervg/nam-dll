@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cISC4NetworkOccupant.h"
+#include "TunnelPortalStyle.h"
 
 #include <cstdint>
 
@@ -21,5 +22,9 @@ namespace TunnelPortalToolPlacement
 		uint32_t x,
 		uint32_t z,
 		cISC4NetworkOccupant::eNetworkType& networkTypeOut);
-	bool PlacePortalPair(const Endpoint& first, const Endpoint& second);
+	uint8_t ExpectedPortalTileCount(cISC4NetworkOccupant::eNetworkType networkType);
+	bool PlacePortalPair(
+		const Endpoint& first,
+		const Endpoint& second,
+		const TunnelPortalStyles::Style& style);
 }
