@@ -582,8 +582,17 @@ namespace
 			return nullptr;
 		}
 
+		// The paired facade models use a fixed north/south half order, while
+		// the native sequence slots also select direction-dependent path,
+		// rotation, and height arrays. A quarter-turn onto the east/west axis
+		// reverses only the facade model halves; keep sequenceIndex for every
+		// native array.
+		const uint8_t styleExemplarIndex =
+			style.tileCount == 2 && (direction & 1) != 0
+				? static_cast<uint8_t>(sequenceIndex ^ 1)
+				: sequenceIndex;
 		const uint32_t nativeExemplarId = exemplarIds[sequenceIndex];
-		exemplarIds[sequenceIndex] = style.portalExemplarIds[sequenceIndex];
+		exemplarIds[sequenceIndex] = style.portalExemplarIds[styleExemplarIndex];
 		cISC4NetworkOccupant* const occupant =
 			InsertTunnelPiece(tool, direction, sequenceIndex, cellInfo);
 		exemplarIds[sequenceIndex] = nativeExemplarId;
@@ -1221,6 +1230,47 @@ namespace
 		}
 	}
 
+	uint32_t CountPathsExitingTowardMouth(
+		cIGZUnknown* tunnel,
+		uint8_t tunnelPieceDirection)
+	{
+		if (!tunnel)
+		{
+			return 0;
+		}
+
+		void** tunnelVtable = *reinterpret_cast<void***>(tunnel);
+		GetPathInfoFn getPathInfo = reinterpret_cast<GetPathInfoFn>(tunnelVtable[0x31]);
+		const RawPathMap* const map = GetPathMap(getPathInfo(tunnel));
+		if (!IsUsablePathMap(map))
+		{
+			return 0;
+		}
+
+		const uint8_t exitDirection =
+			TunnelPieceDirectionToPathDirection(tunnelPieceDirection);
+		uint32_t matchingPathCount = 0;
+		uint32_t visitedNodes = 0;
+		for (RawPathMapNode** bucket = map->start;
+			bucket != map->end && visitedNodes < kMaxPathInfoNodes;
+			++bucket)
+		{
+			for (RawPathMapNode* node = *bucket;
+				node && visitedNodes < kMaxPathInfoNodes;
+				node = node->next)
+			{
+				++visitedNodes;
+				if (HasPathPoints(node)
+					&& static_cast<uint8_t>(node->key) == exitDirection)
+				{
+					++matchingPathCount;
+				}
+			}
+		}
+
+		return matchingPathCount;
+	}
+
 	const RawPathMapNode* FindPathKey(const RawPathMap* map, uint32_t key)
 	{
 		if (!IsUsablePathMap(map))
@@ -1812,10 +1862,67 @@ namespace
 				distanceSquared(firstPortalCells[1].endpoint, secondPortalCells[0].endpoint)
 				+ distanceSquared(firstPortalCells[0].endpoint, secondPortalCells[1].endpoint);
 
-			// Native opposite-facing tunnels use LIFO pairing. Preserve that
-			// behavior on a geometric tie, but choose the shorter/non-crossing
-			// lane association for same-facing and perpendicular custom portals.
-			reverseFirstPortalPairing = reversePairingDistance <= directPairingDistance;
+			const std::array<uint32_t, 2> firstFacingExitPathCounts = {
+				CountPathsExitingTowardMouth(firstPortalCells[0].tunnel, firstDirection),
+				CountPathsExitingTowardMouth(firstPortalCells[1].tunnel, firstDirection),
+			};
+			const std::array<uint32_t, 2> secondFacingExitPathCounts = {
+				CountPathsExitingTowardMouth(secondPortalCells[0].tunnel, secondDirection),
+				CountPathsExitingTowardMouth(secondPortalCells[1].tunnel, secondDirection),
+			};
+			const auto pairingScore = [&] (bool reverse)
+			{
+				uint32_t score = 0;
+				for (size_t i = 0; i < portalCellCount; ++i)
+				{
+					const size_t firstIndex = reverse
+						? portalCellCount - 1 - i
+						: i;
+					const bool firstHasFacingExitPath =
+						firstFacingExitPathCounts[firstIndex] != 0;
+					const bool secondHasFacingExitPath =
+						secondFacingExitPathCounts[i] != 0;
+					if (firstHasFacingExitPath != secondHasFacingExitPath)
+					{
+						++score;
+					}
+				}
+				return score;
+			};
+			const uint32_t directPathScore = pairingScore(false);
+			const uint32_t reversePathScore = pairingScore(true);
+			const bool pathSemanticsDistinguishPairing =
+				directPathScore != reversePathScore;
+
+			if (pathSemanticsDistinguishPairing)
+			{
+				// A one-way Avenue lane must join one path half that exits
+				// toward its mouth to one half that enters from its mouth.
+				// This distinguishes perpendicular and same-facing mouths,
+				// where geometric distance alone can tie or select the wrong
+				// carriageway association.
+				reverseFirstPortalPairing = reversePathScore > directPathScore;
+			}
+			else
+			{
+				// Preserve native LIFO on an otherwise unresolved tie.
+				reverseFirstPortalPairing =
+					reversePairingDistance <= directPairingDistance;
+			}
+
+			logger.WriteLineFormatted(
+				LogLevel::Debug,
+				"TunnelPortalTool: two-tile pairing selected=%s source=%s pathScores direct=%u reverse=%u facingExitPaths first=%u/%u second=%u/%u distances direct=%lld reverse=%lld.",
+				reverseFirstPortalPairing ? "reverse" : "direct",
+				pathSemanticsDistinguishPairing ? "paths" : "geometry",
+				directPathScore,
+				reversePathScore,
+				firstFacingExitPathCounts[0],
+				firstFacingExitPathCounts[1],
+				secondFacingExitPathCounts[0],
+				secondFacingExitPathCounts[1],
+				directPairingDistance,
+				reversePairingDistance);
 		}
 
 		for (size_t i = 0; i < portalCellCount; ++i)

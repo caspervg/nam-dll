@@ -35,12 +35,14 @@ set(NAM_SOURCES
     src/Settings.cpp
     src/TransitAccess.cpp
     src/TunnelPortalTool.cpp
+    src/TunnelPortalStyle.cpp
     src/TunnelPortalToolViewInputControl.cpp
     src/version.rc
 )
 
 set(GZCOM_SOURCES
     vendor/gzcom-dll/gzcom-dll/src/cRZBaseUnknown.cpp
+    vendor/gzcom-dll/gzcom-dll/src/cRZBaseWinProc.cpp
     vendor/gzcom-dll/gzcom-dll/src/cRZBaseString.cpp
     vendor/gzcom-dll/gzcom-dll/src/cRZBaseVariant.cpp
     vendor/gzcom-dll/gzcom-dll/src/cRZCOMDllDirector.cpp
@@ -110,6 +112,12 @@ if(NOT DEFINED ENV{CI})
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "$<TARGET_FILE:NAM>"
             "${NAM_PLUGIN_DIR}/$<TARGET_FILE_NAME:NAM>"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${NAM_ROOT}/resources/tunnel-portal-styles/NAM_TunnelPortalStyles.dat"
+            "${NAM_PLUGIN_DIR}/NAM_TunnelPortalStyles.dat"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${NAM_ROOT}/resources/tunnel-portal-styles/NAM_TunnelPortalStyleExamples.dat"
+            "${NAM_PLUGIN_DIR}/NAM_TunnelPortalStyleExamples.dat"
         COMMENT "Deploying NAM.dll to ${NAM_PLUGIN_DIR}"
     )
 endif()

@@ -20,8 +20,8 @@ Windows target: `SimCity 4.exe`, image-base virtual addresses.
 
 | Address | Name | Notes |
 | --- | --- | --- |
-| `0x00628390` | `InsertTunnelPiece` | Creates a single `0x8A4BD52B` tunnel portal occupant within an initialized `cSC4NetworkTool` placement context. |
-| `0x006287d0` | `InsertTunnelPieces` | Consumes tunnel records produced by the drag solver, creates both portal sides, and links paired tunnel occupants. |
+| `0x00628390` | `cSC4NetworkTool::InsertTunnelPiece` | Creates a single `0x8A4BD52B` tunnel portal occupant within an initialized `cSC4NetworkTool` placement context. |
+| `0x006287d0` | `cSC4NetworkTool::InsertTunnelPieces` | Consumes tunnel records produced by the drag solver, creates both portal sides, and links paired tunnel occupants. |
 | `0x00629210` | `PlaceNetworkOccupants` | Public-ish `cISC4NetworkTool` placement entry. Sets up endpoints, handles adjacency extension, then calls `PlaceNetwork`. |
 | `0x00633030` | `ComputeAndStoreCellInfo` | Builds cached cell info for an existing compatible network occupant at a tile. Returns null when the tile has no matching surface network occupant. |
 | `0x00633220` | `GetCellInfo` | Existing wrapper in `NetworkStubs.h`; fetches cached cell info or calls `ComputeAndStoreCellInfo`. |
@@ -30,11 +30,18 @@ Windows target: `SimCity 4.exe`, image-base virtual addresses.
 | `0x00624210` | `cSC4NetworkTool_CreateNetworkOccupant` | Creates network occupant subclasses. The tunnel subclass is selected by `0x8A4BD52B`. |
 | `0x006272f0` | `ClearNetworkOccsFromCell` | Mac name match. Called by `InsertTunnelPiece` after setting the portal exemplar; clears/replaces existing network occupants from the target cell. |
 | `0x00624fd0` | `PlaceNetworkOccupantById` | Places a single network occupant by ID, but does not obviously use `InsertTunnelPiece`. Probably not sufficient for portals. |
-| `0x00647530` | `cSC4NetworkTunnelOccupant_SetOtherEndOccupant` | Stores the linked endpoint at `this + 0x1d0`, AddRef'ing the new endpoint and Release'ing the old one. |
+| `0x00647530` | `cSC4NetworkTunnelOccupant::SetOtherEndOccupant` | Stores the linked endpoint at `this + 0x1d0`, AddRef'ing the new endpoint and Release'ing the old one. |
 | `0x00647570` | `cSC4NetworkTunnelOccupant_GetOtherEndOccupant` | Returns the linked endpoint from `this + 0x1d0`. |
 | `0x006476f0` | `cSC4NetworkTunnelOccupant_ctor` | Initializes the Windows tunnel occupant, including `this + 0x1d0 = nullptr`. |
 | `0x007140e0` | `cSC4TrafficSimulator::DoTunnelChanged` | Reads linked endpoints and computes tunnel metadata. Existing NAM hook extends supported network types at `0x00714222`. |
+| `0x0071a860` | `cSC4TrafficSimulator::DoConnectionsChanged` | Rebuilds traffic connectivity for a changed cell or region. |
 | `0x004adf50` | `cSC4TrafficNetworkMap_InitializeTunnelPaths` | Scans tunnel occupants and initializes path info when the other endpoint is non-null. |
+| `0x00646260` | `cSC4NetworkToolUI::AddBridgeEntry` | Creates and configures one native bridge-selector entry. Its UI/template and buffer behavior guided the tunnel style selector. |
+| `0x0090b82c` | `cGZGimexFactory::CreateFromResource` | Creates a Gimex image from a resource-manager record. Confirmed from the matching Mac class method, Windows resource lookup, and vtable dispatch. |
+| `0x0090b89f` | `cGZGimexFactory::LoadFromResource` | Loads into an existing Gimex image from a resource-manager record. Confirmed by the adjacent vtable slot and dispatch to `LoadFromSerialRecord`. |
+| `0x0090c5cb` | `cGZGimexFactory::LoadFromSerialRecord` | Constructs the Gimex reader for a serial record and enters the image decode path. |
+| `0x00602b70` | `cSLBuffer::cSLBuffer` | Constructs the screen/image buffer used by the native bridge selector path. |
+| `0x006027c0` | `cSLBuffer::Load` | Loads the decoded image into a `cSLBuffer`. |
 
 ## Key Findings
 
@@ -970,27 +977,148 @@ uniqueness index when the peer offers it and uses geometric proximity only as
 a fallback. Thus source unique `1` maps to peer unique `1`, and source unique
 `2` maps to peer unique `2`.
 
-The first north/south correction incorrectly treated sequence `0` as a
-rotation-independent physical left half. A subsequent south/north Avenue trace
-showed why that model is wrong. At the south-facing portal it placed the
-`entry=1, exit=3` half on the east tile and the `entry=3, exit=1` half on the
-west tile; the north-facing portal was mirrored the same way. The resulting
-entry and exit carriageways were opposite the surface Avenue's driving sides,
-even though each linked pair had matching path keys.
-
 `sequenceIndex` selects three parallel native arrays: exemplar, per-sequence
-rotation adjustment, and height. Its physical meaning therefore rotates with
-those native adjustments and cannot be reduced to a fixed left/right label.
-The native-compatible cross-axis ordering is:
+rotation adjustment, and height. Its physical meaning rotates with those
+native adjustments and cannot be reduced to a fixed left/right label. The
+current cross-axis ordering, derived from Avenue tests and the native
+`InsertTunnelPieces` behavior, is:
 
 - east: ascending Z;
 - west: descending Z;
 - north: descending X;
 - south: ascending X.
 
-`UseAscendingTwoTileSequence` now uses that ordering (`direction == east ||
-direction == south`). Geometric endpoint pairing and path-key stitching remain
-independent.
+`UseAscendingTwoTileSequence` uses that ordering (`direction == east ||
+direction == south`). This is a strong Avenue working hypothesis, not yet a
+confirmed general rule for Highway and Ground Highway.
+
+A later north/east test isolated the remaining replacement-exemplar transform. Globally
+swapping the example DAT's Left and Right exemplars fixed the east-facing end
+mouth but inverted the north-facing start mouth. This initially suggested an
+axis-dependent exemplar mapping:
+
+- north/south: use the style's exemplar order directly;
+- east/west: swap the two style exemplar indices.
+
+`InsertTunnelPieceWithStyle` currently applies that quarter-turn remap. The
+example DAT retains its declared Left/Right property order, and the native
+sequence index still selects every native tool array.
+
+DBPF inspection shows that this is not merely a facade/model choice. The Maxis
+Avenue example exemplars are:
+
+- Left: `6534284A-CB730FAC-4A710000`, with model instance `4A710000`;
+- Right: `6534284A-CB730FAC-4A720000`, with model instance `4A720000`.
+
+The package also contains SC4Path resources with the corresponding instances:
+
+- `296678F7-A966883F-4A710000`: two `East -> West` car paths;
+- `296678F7-A966883F-4A720000`: two `West -> East` car paths.
+
+The Rivit Avenue pair follows the same directional split at instances
+`4A730000` and `4A740000`. Consequently, changing which replacement exemplar
+occupies a native sequence slot changes both the visible half and that
+occupant's one-way path set. The transform must be correct for traffic
+semantics, not just appearance.
+
+An earlier south-to-north Avenue placement at `(51,42) -> (46,71)` appeared to
+render one mouth with its two occupants reversed. Its runtime trace reported:
+
+- portal directions `2/0` (south/north);
+- first mouth sequence order `(51,42)=0`, `(52,42)=1`;
+- second mouth sequence order `(47,71)=0`, `(46,71)=1`;
+- reverse association, pairing first sequence `1 -> 0` and `0 -> 1`;
+- matching full path keys on both paired occupants;
+- zero unresolved peer path lookups.
+
+A subsequent full direction-pair matrix corrected that interpretation. All
+tested Maxis Avenue and Rivit Avenue mouths were visually correct in every
+straight and perpendicular combination. The current replacement transform is
+therefore retained:
+
+- north/south: direct exemplar order;
+- east/west: swapped exemplar order.
+
+The functional failures in that matrix correlate with peer occupant
+association and path stitching, not with the visible exemplar transform. Do
+not change the replacement order in response to the perpendicular path
+failures.
+
+There are three distinct two-tile mappings and they must not be inferred from
+one another:
+
+| Mapping | Current implementation | Confidence |
+| --- | --- | --- |
+| Cell to native `sequenceIndex` | Direction-dependent cross-axis sort | Strong for tested Avenue orientations; unverified for Highway/Ground Highway |
+| Occupant to peer occupant | Minimum total squared distance; native LIFO on a tie | Heuristic for arbitrary orientations |
+| Replacement exemplar/path set to native sequence slot | Direct for north/south, swapped for east/west | Visually validated across the Avenue direction-pair matrix; other two-tile networks remain unverified |
+
+The distance pairing is also not intrinsically foolproof. It finds the
+geometrically non-crossing association, but distance does not encode Avenue
+driving side, path entry/exit semantics, or which facade half belongs to a
+native sequence slot. A stronger implementation should classify each created
+occupant by its actual non-empty path directions and surface-side position,
+then pair compatible carriageways. Geometry should be only a tie-breaker.
+
+The Avenue visual matrix is now complete enough to retain the current
+axis-based transform. Highway and Ground Highway still need their own
+controlled matrix because their native arrays need not share Avenue's
+ordering. Future traces should also log the inserted replacement exemplar ID
+directly rather than requiring it to be inferred from sequence and direction.
+
+### 2026-07-23 direction-pair matrix: perpendicular pairing is a tie
+
+A larger Avenue matrix covered straight and perpendicular direction pairs.
+Every placement selected `mode=reverse`. That does not mean reverse was
+geometrically better in every case. For two perpendicular two-tile mouths, the
+sum of squared distances is identical for direct and reverse association. The
+current comparison uses `reverseDistance <= directDistance`, so every such tie
+falls back to native LIFO/reverse association.
+
+The path-refresh counters reveal that this fallback is wrong for the current
+perpendicular Avenue occupants:
+
+| Mouth directions | Pair 0 lookups | Pair 1 lookups | Interpretation |
+| --- | --- | --- | --- |
+| South/North (`2/0`) | `0/2` | `2/0` | Straight native-style result: one active end per physical lane |
+| West/East (`3/1`) | `2/0` | `0/2` | Straight native-style result: one active end per physical lane |
+| South/East (`2/1`) | `0/0` | `2/2` | Reverse paired inactive/inactive and active/active |
+| South/West (`2/3`) | `0/0` | `2/2` | Reverse paired inactive/inactive and active/active |
+| West/North (`3/0`) | `2/2` | `0/0` | Reverse paired active/active and inactive/inactive |
+| North/East (`0/1`) | `0/0` | `2/2` | Reverse paired inactive/inactive and active/active |
+| East/North (`1/0`) | `2/2` | `0/0` | Reverse paired active/active and inactive/inactive |
+
+Here `a/b` is the number of exact or uniqueness-preserving peer lookups made
+from the first and second occupants. A `0/0` result with `unresolved=0` is not
+success: no local path passed `MakeTunnelPaths`' direction filter, so no peer
+lookup was attempted and nothing could be counted as unresolved.
+
+Under the currently installed replacement-exemplar mapping, the occupant whose
+non-empty path exit matches the mouth-facing lookup direction is:
+
+| Mouth facing | Active native sequence |
+| --- | --- |
+| North | `0` |
+| East | `1` |
+| South | `0` |
+| West | `1` |
+
+Consequently, reverse association is correct for the two tested straight
+opposite-facing cases, while direct association would give each perpendicular
+lane exactly one active end. Reverse association instead joins both active
+halves and both inactive halves.
+
+This finding should not be reduced to a permanent same-axis/reverse,
+cross-axis/direct formula because correcting the replacement exemplar/path
+assignment can change which sequence is active. The robust Avenue rule is to
+inspect the actual created path maps. Evaluate both direct and reverse
+associations and prefer the one for which each linked pair has exactly one
+occupant with a non-empty path whose exit matches that mouth's path lookup
+direction. Geometry and native LIFO should be fallback tie-breakers only.
+
+The diagnostics should also gain an explicit local matching-path count. The
+current `exact`, `remappedUnique`, and `unresolved` counters describe peer
+lookups only and make the all-zero no-op case look deceptively clean.
 
 Reload testing exposed a separate direction-numbering error in saved custom
 portal reconstruction. `TryGetTunnelAtEndpoint` used
