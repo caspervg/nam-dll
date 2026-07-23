@@ -970,20 +970,38 @@ uniqueness index when the peer offers it and uses geometric proximity only as
 a fallback. Thus source unique `1` maps to peer unique `1`, and source unique
 `2` maps to peer unique `2`.
 
-The accompanying in-game path-overlay screenshot also exposed a model-level
-sequence error: for north/south portals, the left and right portal halves were
-swapped before any lane association or path stitching occurred. The earlier
-vertical ordering rule had only been extrapolated from the native east/west
-trace and used the wrong rotation transform.
+The first north/south correction incorrectly treated sequence `0` as a
+rotation-independent physical left half. A subsequent south/north Avenue trace
+showed why that model is wrong. At the south-facing portal it placed the
+`entry=1, exit=3` half on the east tile and the `entry=3, exit=1` half on the
+west tile; the north-facing portal was mirrored the same way. The resulting
+entry and exit carriageways were opposite the surface Avenue's driving sides,
+even though each linked pair had matching path keys.
 
-The confirmed east/west ordering means sequence `0` is the physical left half
-when facing into the tunnel:
+`sequenceIndex` selects three parallel native arrays: exemplar, per-sequence
+rotation adjustment, and height. Its physical meaning therefore rotates with
+those native adjustments and cannot be reduced to a fixed left/right label.
+The native-compatible cross-axis ordering is:
 
 - east: ascending Z;
 - west: descending Z;
-- north: ascending X;
-- south: descending X.
+- north: descending X;
+- south: ascending X.
 
-`UseAscendingTwoTileSequence` now applies that rotated left/right rule. This
-changes the vertical portal exemplar/rotation selection while leaving geometric
-endpoint pairing and path-key stitching independent.
+`UseAscendingTwoTileSequence` now uses that ordering (`direction == east ||
+direction == south`). Geometric endpoint pairing and path-key stitching remain
+independent.
+
+Reload testing exposed a separate direction-numbering error in saved custom
+portal reconstruction. `TryGetTunnelAtEndpoint` used
+`occupant->GetRotation() & 3` as an `InsertTunnelPiece` direction and later
+passed it through `TunnelPieceDirectionToPathDirection`. The occupant rotation
+already includes the native tunnel array's quarter-turn adjustment: a
+south-facing portal reports model/path rotation `3`, while a north-facing
+portal reports `1`. Converting those values a second time produced reload
+directions `0` and `2`, visible in the startup path-refresh log, and prevented
+the Avenue paths from being restored.
+
+Saved reconstruction now re-infers the insertion direction from the portal
+cell's surviving surface-approach edge. If that edge is ambiguous, it reverses
+the native quarter-turn adjustment with `(occupantRotation + 3) & 3`.

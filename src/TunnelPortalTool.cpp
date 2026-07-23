@@ -374,11 +374,12 @@ namespace
 
 	bool UseAscendingTwoTileSequence(uint8_t tunnelPieceDirection)
 	{
-		// Sequence 0 is the physical left portal half when facing into the
-		// tunnel. Native traces establish east=ascending Z and west=descending
-		// Z. Rotating that same left/right rule gives north=ascending X and
-		// south=descending X.
-		return tunnelPieceDirection == 0 || tunnelPieceDirection == 1;
+		// Preserve the native two-tile sequence transform. East- and
+		// south-facing portals assign sequence 0 to the lower cross-axis
+		// coordinate; west- and north-facing portals assign it to the higher
+		// coordinate. The sequence numbers select native exemplar/rotation/path
+		// arrays and are not a rotation-independent left/right designation.
+		return tunnelPieceDirection == 1 || tunnelPieceDirection == 2;
 	}
 
 	int32_t CrossAxisCoordinate(const Endpoint& endpoint, uint8_t tunnelPieceDirection)
@@ -891,7 +892,16 @@ namespace
 		cISC4NetworkOccupant* occupant = cellInfo ? cellInfo->networkOccupant : nullptr;
 		if (occupant && occupant->QueryInterface(kNetworkTunnelOccupantID, tunnelOut.AsPPVoid()) && tunnelOut)
 		{
-			directionOut = occupant->GetRotation() & 3;
+			// The placed occupant stores the exemplar/model rotation, which is
+			// one quarter-turn ahead of InsertTunnelPiece's direction code for
+			// the native tunnel arrays. Prefer the surviving surface approach
+			// edge because it expresses the original portal direction directly;
+			// use the inverse rotation transform only when the edge is ambiguous.
+			directionOut = static_cast<uint8_t>((occupant->GetRotation() + 3) & 3);
+			TryInferTunnelPieceDirectionFromSurfaceApproach(
+				cellInfo,
+				endpoint.networkType,
+				directionOut);
 			return true;
 		}
 

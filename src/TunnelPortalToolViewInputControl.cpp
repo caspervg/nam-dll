@@ -7,7 +7,7 @@
 #include "cGZMessage.h"
 #include "cGZPersistResourceKey.h"
 #include "cIGZBuffer.h"
-#include "cIGZGimexFactory.h"
+#include "cIGZPersistResourceManager.h"
 #include "cISC4App.h"
 #include "cISC4City.h"
 #include "cISC4View3DWin.h"
@@ -51,6 +51,16 @@ namespace
 	constexpr uint32_t kStyleEntryButtonBaseID = 0xA1000;
 	constexpr uint32_t kButtonActivatedMessage = 0x287259F6;
 	constexpr uint32_t kPNGType = 0x856DDBAC;
+	constexpr uint32_t kPNGResourceIID = 0x06F1568E;
+
+	// The PNG resource factory returns this interface for type 0x856DDBAC.
+	// cSC4NetworkToolUI's bridge-entry path calls its first method to obtain
+	// the decoded buffer before passing that buffer to cIGZWinBtn::SetStyle.
+	class cIGZPNGResource : public cIGZUnknown
+	{
+	public:
+		virtual cIGZBuffer* AsIGZBuffer() = 0;
+	};
 
 	using TunnelPortalToolPlacement::Endpoint;
 	using TunnelPortalToolPlacement::ExpectedPortalTileCount;
@@ -398,10 +408,8 @@ namespace
 				return;
 			}
 
-			cISC4AppPtr app;
-			cIGZGimexFactory* const gimexFactory =
-				app ? app->GetGimexFactory() : nullptr;
-			if (!gimexFactory)
+			cIGZPersistResourceManagerPtr resourceManager;
+			if (!resourceManager)
 			{
 				return;
 			}
@@ -410,19 +418,36 @@ namespace
 				kPNGType,
 				style.iconGroup,
 				style.iconInstance);
-			cRZAutoRefCount<cIGZBuffer> buffer;
-			const bool created = gimexFactory->CreateFromResource(
+			cRZAutoRefCount<cIGZPNGResource> pngResource;
+			const bool loaded = resourceManager->GetResource(
 				iconKey,
-				0,
-				buffer.AsPPObj(),
-				cGZBufferColorType::AutoFromScreenFormat);
-			if (created && buffer)
+				kPNGResourceIID,
+				pngResource.AsPPVoid(),
+				cGZBufferColorType::AutoFromScreenFormat,
+				nullptr);
+			if (loaded && pngResource)
 			{
+				cIGZBuffer* const decodedBuffer = pngResource->AsIGZBuffer();
+				if (!decodedBuffer)
+				{
+					Logger::GetInstance().WriteLineFormatted(
+						LogLevel::Error,
+						"TunnelPortalTool: PNG resource %08X-%08X-%08X returned no decoded buffer.",
+						kPNGType,
+						style.iconGroup,
+						style.iconInstance);
+					return;
+				}
+
+				cRZAutoRefCount<cIGZBuffer> buffer(
+					decodedBuffer,
+					cRZAutoRefCount<cIGZBuffer>::kAddRef);
+				const int32_t width = buffer->Width();
+				const int32_t height = buffer->Height();
+
 				// Match cSC4NetworkToolUI::AddBridgeEntry: retain the button's
 				// script-defined toggle style and install a prebuilt four-frame
 				// state strip.
-				const int32_t width = buffer->Width();
-				const int32_t height = buffer->Height();
 				const cIGZWinBtn::Style buttonStyle = button->GetStyle();
 				const bool styleSet =
 					button->SetStyle(buttonStyle, buffer, nullptr);
@@ -440,18 +465,21 @@ namespace
 				{
 					return;
 				}
+				// The four-frame PNG already contains the style name. Keep the
+				// caption only for entries such as Default that have no icon.
+				button->SetBtnFlag(cIGZWinBtn::BtnFlagShowCaption, false);
 				iconBuffers.push_back(std::move(buffer));
 			}
 			else
 			{
 				Logger::GetInstance().WriteLineFormatted(
 					LogLevel::Error,
-					"TunnelPortalTool: Gimex failed to load style icon %08X-%08X-%08X (created=%d, buffer=%d).",
+					"TunnelPortalTool: PNG resource manager failed to load style icon %08X-%08X-%08X (loaded=%d, resource=%d).",
 					kPNGType,
 					style.iconGroup,
 					style.iconInstance,
-					created ? 1 : 0,
-					buffer ? 1 : 0);
+					loaded ? 1 : 0,
+					pngResource ? 1 : 0);
 			}
 		}
 
