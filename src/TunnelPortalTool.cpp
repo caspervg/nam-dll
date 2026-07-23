@@ -374,10 +374,11 @@ namespace
 
 	bool UseAscendingTwoTileSequence(uint8_t tunnelPieceDirection)
 	{
-		// Native Avenue placement uses ascending cross-axis
-		// order while west-facing portals use descending order. The same rule is
-		// expected for south/north on the perpendicular axis.
-		return tunnelPieceDirection == 1 || tunnelPieceDirection == 2;
+		// Sequence 0 is the physical left portal half when facing into the
+		// tunnel. Native traces establish east=ascending Z and west=descending
+		// Z. Rotating that same left/right rule gives north=ascending X and
+		// south=descending X.
+		return tunnelPieceDirection == 0 || tunnelPieceDirection == 1;
 	}
 
 	int32_t CrossAxisCoordinate(const Endpoint& endpoint, uint8_t tunnelPieceDirection)
@@ -536,7 +537,14 @@ namespace
 	// path direction with this path-key direction. This uses kNextX/kNextZ numbering:
 	// 0=west, 1=north, 2=east, 3=south.
 	uint8_t sCustomPortalFacingOverride = 0xFF;
+	constexpr uint16_t kAutomaticPeerPathLookup = 0xFFFE;
 	uint16_t sCustomPeerPathLookupKeyLowWord = 0xFFFF;
+	void* sCustomSelfPathInfo = nullptr;
+	void* sCustomPeerPathInfo = nullptr;
+	uint32_t sPeerPathExactKeyCount = 0;
+	uint32_t sPeerPathRemappedUniqueKeyCount = 0;
+	uint32_t sPeerPathUnresolvedKeyCount = 0;
+	std::array<uint32_t, 4> sPeerPathUnresolvedOriginalKeys{};
 
 	InsertTunnelPieceFn InsertTunnelPiece = reinterpret_cast<InsertTunnelPieceFn>(0x00628390);
 	AddTripNodeFn AddTripNode = reinterpret_cast<AddTripNodeFn>(0x006d8fa0);
@@ -830,20 +838,19 @@ namespace
 	};
 
 	bool TryGetTunnelAtEndpoint(
-		const Endpoint& endpoint,
+		Endpoint& endpoint,
 		uint8_t& directionOut,
 		cRZAutoRefCount<cIGZUnknown>& tunnelOut)
 	{
-		Endpoint networkEndpoint = endpoint;
-		if (!TryFindNetworkAtTileInternal(networkEndpoint.x, networkEndpoint.z, networkEndpoint.networkType))
+		if (!TryFindNetworkAtTileInternal(endpoint.x, endpoint.z, endpoint.networkType))
 		{
 			return false;
 		}
 
 		cISC4City* city = GetCity();
 		cISC4NetworkManager* networkManager = city ? city->GetNetworkManager() : nullptr;
-		cSC4NetworkTool* tool = GetNetworkTool(networkManager, networkEndpoint.networkType);
-		cSC4NetworkCellInfo* cellInfo = GetEndpointCell(tool, networkEndpoint);
+		cSC4NetworkTool* tool = GetNetworkTool(networkManager, endpoint.networkType);
+		cSC4NetworkCellInfo* cellInfo = GetEndpointCell(tool, endpoint);
 		cISC4NetworkOccupant* occupant = cellInfo ? cellInfo->networkOccupant : nullptr;
 		if (occupant && occupant->QueryInterface(kNetworkTunnelOccupantID, tunnelOut.AsPPVoid()) && tunnelOut)
 		{
@@ -897,28 +904,43 @@ namespace
 
 				const uint8_t firstVectorDirection = InferTunnelPieceDirection(first, second);
 				const uint8_t secondVectorDirection = InferTunnelPieceDirection(second, first);
-				if (firstDirection == firstVectorDirection && secondDirection == secondVectorDirection)
+				const bool requiresCustomPathStitch =
+					firstDirection != firstVectorDirection
+						|| secondDirection != secondVectorDirection;
+				const bool requiresAvenuePathKeyResolution =
+					IsTwoTileNetwork(first.networkType)
+						|| IsTwoTileNetwork(second.networkType);
+				if (!requiresCustomPathStitch && !requiresAvenuePathKeyResolution)
 				{
 					continue;
 				}
 
-				RegisterCustomTunnelRouteEdgeFix(
-					first,
-					second,
-					TunnelPieceDirectionToPathDirection(firstDirection),
-					TunnelPieceDirectionToPathDirection(secondDirection));
+				if (requiresCustomPathStitch)
+				{
+					RegisterCustomTunnelRouteEdgeFix(
+						first,
+						second,
+						TunnelPieceDirectionToPathDirection(firstDirection),
+						TunnelPieceDirectionToPathDirection(secondDirection));
+				}
 				if (refreshPathInfo)
 				{
+					const uint16_t firstPeerLookup = requiresAvenuePathKeyResolution
+						? kAutomaticPeerPathLookup
+						: TunnelPathKeyLowWord(TunnelPieceDirectionToPathDirection(secondDirection));
+					const uint16_t secondPeerLookup = requiresAvenuePathKeyResolution
+						? kAutomaticPeerPathLookup
+						: TunnelPathKeyLowWord(TunnelPieceDirectionToPathDirection(firstDirection));
 					RefreshTunnelPathInfo(
 						firstTunnel,
 						secondTunnel,
 						TunnelPieceDirectionToPathDirection(firstDirection),
-						TunnelPathKeyLowWord(TunnelPieceDirectionToPathDirection(secondDirection)));
+						firstPeerLookup);
 					RefreshTunnelPathInfo(
 						secondTunnel,
 						firstTunnel,
 						TunnelPieceDirectionToPathDirection(secondDirection),
-						TunnelPathKeyLowWord(TunnelPieceDirectionToPathDirection(firstDirection)));
+						secondPeerLookup);
 				}
 			}
 		}
@@ -984,6 +1006,293 @@ namespace
 	void* sInitTunnelPathTrampolinePtr = nullptr;
 	void* sPeerPathLookupTrampolinePtr = nullptr;
 
+	constexpr size_t kPathInfoPathMapOffset = 0x1c;
+	constexpr size_t kMaxPathInfoBuckets = 4096;
+	constexpr size_t kMaxPathInfoNodes = 16384;
+
+	struct RawPathVector
+	{
+		uint8_t* start;
+		uint8_t* end;
+		uint8_t* capacity;
+	};
+
+	struct RawPathMapNode
+	{
+		RawPathMapNode* next;
+		uint32_t key;
+		RawPathVector path;
+	};
+
+	struct RawPathMap
+	{
+		uint32_t reserved;
+		RawPathMapNode** start;
+		RawPathMapNode** end;
+		RawPathMapNode** capacity;
+	};
+
+	static_assert(sizeof(RawPathVector) == 0x0c);
+	static_assert(sizeof(RawPathMapNode) == 0x14);
+	static_assert(sizeof(RawPathMap) == 0x10);
+
+	struct RawPathPoint
+	{
+		float x;
+		float y;
+		float z;
+	};
+
+	static_assert(sizeof(RawPathPoint) == 0x0c);
+
+	const RawPathMap* GetPathMap(void* pathInfo)
+	{
+		return pathInfo
+			? reinterpret_cast<const RawPathMap*>(
+				reinterpret_cast<const uint8_t*>(pathInfo) + kPathInfoPathMapOffset)
+			: nullptr;
+	}
+
+	bool IsUsablePathMap(const RawPathMap* map)
+	{
+		if (!map || !map->start || !map->end || map->end < map->start)
+		{
+			return false;
+		}
+
+		const uintptr_t bucketCount = static_cast<uintptr_t>(map->end - map->start);
+		return bucketCount > 0 && bucketCount <= kMaxPathInfoBuckets;
+	}
+
+	bool HasPathPoints(const RawPathMapNode* node)
+	{
+		return node
+			&& node->path.start
+			&& node->path.end
+			&& node->path.end > node->path.start;
+	}
+
+	uint32_t CountPathPoints(const RawPathMapNode* node)
+	{
+		if (!HasPathPoints(node))
+		{
+			return 0;
+		}
+
+		const ptrdiff_t byteCount = node->path.end - node->path.start;
+		return byteCount >= static_cast<ptrdiff_t>(sizeof(RawPathPoint))
+			&& byteCount % sizeof(RawPathPoint) == 0
+			? static_cast<uint32_t>(byteCount / sizeof(RawPathPoint))
+			: 0;
+	}
+
+	const RawPathPoint* FirstPathPoint(const RawPathMapNode* node)
+	{
+		return CountPathPoints(node) > 0
+			? reinterpret_cast<const RawPathPoint*>(node->path.start)
+			: nullptr;
+	}
+
+	const RawPathPoint* LastPathPoint(const RawPathMapNode* node)
+	{
+		if (!HasPathPoints(node))
+		{
+			return nullptr;
+		}
+
+		const ptrdiff_t byteCount = node->path.end - node->path.start;
+		if (byteCount < static_cast<ptrdiff_t>(sizeof(RawPathPoint))
+			|| byteCount % sizeof(RawPathPoint) != 0)
+		{
+			return nullptr;
+		}
+
+		return reinterpret_cast<const RawPathPoint*>(
+			node->path.end - sizeof(RawPathPoint));
+	}
+
+	void TracePathMap(const char* label, cIGZUnknown* tunnel)
+	{
+		if (!tunnel)
+		{
+			return;
+		}
+
+		void** tunnelVtable = *reinterpret_cast<void***>(tunnel);
+		GetPathInfoFn getPathInfo = reinterpret_cast<GetPathInfoFn>(tunnelVtable[0x31]);
+		void* const pathInfo = getPathInfo(tunnel);
+		const RawPathMap* const map = GetPathMap(pathInfo);
+		Logger& logger = Logger::GetInstance();
+		if (!IsUsablePathMap(map))
+		{
+			logger.WriteLineFormatted(
+				LogLevel::Debug,
+				"TunnelPortalTool: %s path map unavailable pathInfo=%p.",
+				label,
+				pathInfo);
+			return;
+		}
+
+		uint32_t pathIndex = 0;
+		for (RawPathMapNode** bucket = map->start;
+			bucket != map->end && pathIndex < 24;
+			++bucket)
+		{
+			for (RawPathMapNode* node = *bucket; node && pathIndex < 24; node = node->next)
+			{
+				const RawPathPoint* const first = FirstPathPoint(node);
+				const RawPathPoint* const last = LastPathPoint(node);
+				logger.WriteLineFormatted(
+					LogLevel::Debug,
+					"TunnelPortalTool: %s path[%u] key=0x%08X keyType=%u pathType=%u unique=%u entry=%u exit=%u points=%u first=(%.2f,%.2f,%.2f) last=(%.2f,%.2f,%.2f).",
+					label,
+					pathIndex,
+					node->key,
+					(node->key >> 28) & 0x0F,
+					(node->key >> 24) & 0x0F,
+					(node->key >> 16) & 0xFF,
+					(node->key >> 8) & 0xFF,
+					node->key & 0xFF,
+					CountPathPoints(node),
+					first ? first->x : 0.0f,
+					first ? first->y : 0.0f,
+					first ? first->z : 0.0f,
+					last ? last->x : 0.0f,
+					last ? last->y : 0.0f,
+					last ? last->z : 0.0f);
+				++pathIndex;
+			}
+		}
+
+		if (pathIndex == 0)
+		{
+			logger.WriteLineFormatted(
+				LogLevel::Debug,
+				"TunnelPortalTool: %s path map is empty pathInfo=%p.",
+				label,
+				pathInfo);
+		}
+	}
+
+	const RawPathMapNode* FindPathKey(const RawPathMap* map, uint32_t key)
+	{
+		if (!IsUsablePathMap(map))
+		{
+			return nullptr;
+		}
+
+		const uintptr_t bucketCount = static_cast<uintptr_t>(map->end - map->start);
+		for (RawPathMapNode* node = map->start[key % bucketCount]; node; node = node->next)
+		{
+			if (node->key == key)
+			{
+				return node;
+			}
+		}
+
+		return nullptr;
+	}
+
+	// Path key layout confirmed from cISC4PathInfo::ExtractFullPathKey:
+	//   bits 31..28 key type, 27..24 path type, 23..16 uniqueness index,
+	//   15..8 entry direction, 7..0 exit direction.
+	//
+	// Avenue halves can number otherwise-compatible paths differently. Keep
+	// the key/path type byte and requested peer directions, but resolve the
+	// peer's actual uniqueness byte when the direct rewritten key is absent.
+	uint32_t __stdcall ResolvePeerPathLookupKey(uint32_t originalKey)
+	{
+		if (sCustomPeerPathLookupKeyLowWord == 0xFFFF)
+		{
+			return originalKey;
+		}
+
+		const bool automaticPeerLookup =
+			sCustomPeerPathLookupKeyLowWord == kAutomaticPeerPathLookup;
+		const uint32_t rewrittenKey = automaticPeerLookup
+			? originalKey
+			: (originalKey & 0xFFFF0000u) | sCustomPeerPathLookupKeyLowWord;
+		const RawPathMap* const peerMap = GetPathMap(sCustomPeerPathInfo);
+		const RawPathMapNode* const exactNode = FindPathKey(peerMap, rewrittenKey);
+		if (HasPathPoints(exactNode))
+		{
+			++sPeerPathExactKeyCount;
+			return rewrittenKey;
+		}
+		if (!IsUsablePathMap(peerMap))
+		{
+			if (sPeerPathUnresolvedKeyCount < sPeerPathUnresolvedOriginalKeys.size())
+			{
+				sPeerPathUnresolvedOriginalKeys[sPeerPathUnresolvedKeyCount] = originalKey;
+			}
+			++sPeerPathUnresolvedKeyCount;
+			return rewrittenKey;
+		}
+
+		const uint32_t typeMask = 0xFF000000u;
+		const RawPathMapNode* const sourceNode =
+			FindPathKey(GetPathMap(sCustomSelfPathInfo), originalKey);
+		const RawPathPoint* const sourceLastPoint = LastPathPoint(sourceNode);
+		const uint32_t originalUniqueIndex = originalKey & 0x00FF0000u;
+		const RawPathMapNode* bestSameUniqueNode = nullptr;
+		float bestSameUniqueDistanceSquared = 3.4e38f;
+		const RawPathMapNode* bestNode = nullptr;
+		float bestDistanceSquared = 3.4e38f;
+		uint32_t visitedNodes = 0;
+		for (RawPathMapNode** bucket = peerMap->start;
+			bucket != peerMap->end && visitedNodes < kMaxPathInfoNodes;
+			++bucket)
+		{
+			for (RawPathMapNode* node = *bucket;
+				node && visitedNodes < kMaxPathInfoNodes;
+				node = node->next)
+			{
+				++visitedNodes;
+				if ((node->key & typeMask) == (originalKey & typeMask)
+					&& (automaticPeerLookup
+						|| static_cast<uint16_t>(node->key) == sCustomPeerPathLookupKeyLowWord)
+					&& HasPathPoints(node))
+				{
+					const RawPathPoint* const peerFirstPoint = FirstPathPoint(node);
+					float distanceSquared = 0.0f;
+					if (sourceLastPoint && peerFirstPoint)
+					{
+						const float dx = peerFirstPoint->x - sourceLastPoint->x;
+						const float dz = peerFirstPoint->z - sourceLastPoint->z;
+						distanceSquared = dx * dx + dz * dz;
+					}
+					if (!bestNode || distanceSquared < bestDistanceSquared)
+					{
+						bestNode = node;
+						bestDistanceSquared = distanceSquared;
+					}
+					if ((node->key & 0x00FF0000u) == originalUniqueIndex
+						&& (!bestSameUniqueNode
+							|| distanceSquared < bestSameUniqueDistanceSquared))
+					{
+						bestSameUniqueNode = node;
+						bestSameUniqueDistanceSquared = distanceSquared;
+					}
+				}
+			}
+		}
+
+		const RawPathMapNode* const selectedNode =
+			bestSameUniqueNode ? bestSameUniqueNode : bestNode;
+		if (selectedNode)
+		{
+			++sPeerPathRemappedUniqueKeyCount;
+			return selectedNode->key;
+		}
+
+		if (sPeerPathUnresolvedKeyCount < sPeerPathUnresolvedOriginalKeys.size())
+		{
+			sPeerPathUnresolvedOriginalKeys[sPeerPathUnresolvedKeyCount] = originalKey;
+		}
+		++sPeerPathUnresolvedKeyCount;
+		return rewrittenKey;
+	}
+
 	// Mid-function hook targeting the 6-byte "call [edx+0xC4]" at 0x0053FDEE inside
 	// cSC4PathInfo::MakeTunnelPaths (confirmed function entry: 0x0053FD70).
 	//
@@ -1031,7 +1340,12 @@ namespace
 		__asm {
 			cmp  word ptr [sCustomPeerPathLookupKeyLowWord], 0xFFFF
 			je   done
-			mov  ax, word ptr [sCustomPeerPathLookupKeyLowWord]
+			push edx
+			push ecx
+			push eax
+			call ResolvePeerPathLookupKey
+			pop  ecx
+			pop  edx
 		done:
 			jmp  dword ptr [sPeerPathLookupTrampolinePtr]
 		}
@@ -1227,12 +1541,37 @@ namespace
 
 		void** pathInfoVtable = *reinterpret_cast<void***>(pathInfo);
 		InitTunnelPathFn initTunnelPath = reinterpret_cast<InitTunnelPathFn>(pathInfoVtable[0x20]);
+		void** otherEndVtable = *reinterpret_cast<void***>(otherEnd);
+		GetPathInfoFn getOtherPathInfo = reinterpret_cast<GetPathInfoFn>(otherEndVtable[0x31]);
 
 		sCustomPortalFacingOverride = selfLookupPathDirection;
 		sCustomPeerPathLookupKeyLowWord = peerPathKeyLowWord;
+		sCustomSelfPathInfo = pathInfo;
+		sCustomPeerPathInfo = getOtherPathInfo(otherEnd);
+		sPeerPathExactKeyCount = 0;
+		sPeerPathRemappedUniqueKeyCount = 0;
+		sPeerPathUnresolvedKeyCount = 0;
+		sPeerPathUnresolvedOriginalKeys.fill(0);
 		initTunnelPath(pathInfo, self, otherEnd);
+		if (peerPathKeyLowWord != 0xFFFF)
+		{
+			logger.WriteLineFormatted(
+				LogLevel::Debug,
+				"TunnelPortalTool: path refresh selfDirection=%u peerLowWord=0x%04X peer lookups exact=%u remappedUnique=%u unresolved=%u unresolvedKeys=0x%08X/0x%08X/0x%08X/0x%08X.",
+				static_cast<uint32_t>(selfLookupPathDirection),
+				static_cast<uint32_t>(peerPathKeyLowWord),
+				sPeerPathExactKeyCount,
+				sPeerPathRemappedUniqueKeyCount,
+				sPeerPathUnresolvedKeyCount,
+				sPeerPathUnresolvedOriginalKeys[0],
+				sPeerPathUnresolvedOriginalKeys[1],
+				sPeerPathUnresolvedOriginalKeys[2],
+				sPeerPathUnresolvedOriginalKeys[3]);
+		}
 		sCustomPortalFacingOverride = 0xFF;
 		sCustomPeerPathLookupKeyLowWord = 0xFFFF;
+		sCustomSelfPathInfo = nullptr;
+		sCustomPeerPathInfo = nullptr;
 	}
 
 	void NotifyTrafficSimulatorForLinkedTunnels(
@@ -1396,14 +1735,61 @@ namespace
 			}
 		}
 
+		bool reverseFirstPortalPairing = true;
+		if (portalCellCount == 2)
+		{
+			const auto distanceSquared = [](const Endpoint& a, const Endpoint& b)
+			{
+				const int64_t dx = static_cast<int64_t>(b.x) - static_cast<int64_t>(a.x);
+				const int64_t dz = static_cast<int64_t>(b.z) - static_cast<int64_t>(a.z);
+				return dx * dx + dz * dz;
+			};
+			const int64_t directPairingDistance =
+				distanceSquared(firstPortalCells[0].endpoint, secondPortalCells[0].endpoint)
+				+ distanceSquared(firstPortalCells[1].endpoint, secondPortalCells[1].endpoint);
+			const int64_t reversePairingDistance =
+				distanceSquared(firstPortalCells[1].endpoint, secondPortalCells[0].endpoint)
+				+ distanceSquared(firstPortalCells[0].endpoint, secondPortalCells[1].endpoint);
+
+			// Native opposite-facing tunnels use LIFO pairing. Preserve that
+			// behavior on a geometric tie, but choose the shorter/non-crossing
+			// lane association for same-facing and perpendicular custom portals.
+			reverseFirstPortalPairing = reversePairingDistance <= directPairingDistance;
+		}
+
 		for (size_t i = 0; i < portalCellCount; ++i)
 		{
-			// Native InsertTunnelPieces pushes every first-side occupant in
-			// sequence order, then consumes that list with back()/pop_back()
-			// while walking the second side. Mirror that LIFO association so
-			// parallel physical lanes connect without crossing.
-			PortalCell& firstPortalCell = firstPortalCells[portalCellCount - 1 - i];
+			const size_t firstPortalCellIndex = reverseFirstPortalPairing
+				? portalCellCount - 1 - i
+				: i;
+			PortalCell& firstPortalCell = firstPortalCells[firstPortalCellIndex];
 			PortalCell& secondPortalCell = secondPortalCells[i];
+
+			if (portalCellCount > 1)
+			{
+				const uint32_t networkIndex = static_cast<uint32_t>(first.networkType);
+				logger.WriteLineFormatted(
+					LogLevel::Debug,
+					"TunnelPortalTool: lane pair %u mode=%s first=(%u,%u) seq=%u piece=0x%08X rf=0x%02X edges=0x%08X second=(%u,%u) seq=%u piece=0x%08X rf=0x%02X edges=0x%08X portalDirections=%u/%u.",
+					static_cast<uint32_t>(i),
+					reverseFirstPortalPairing ? "reverse" : "direct",
+					firstPortalCell.endpoint.x,
+					firstPortalCell.endpoint.z,
+					static_cast<uint32_t>(firstPortalCell.sequenceIndex),
+					firstPortalCell.occupant->PieceId(),
+					static_cast<uint32_t>(firstPortalCell.occupant->GetRotationAndFlip()),
+					firstPortalCell.cellInfo->edgesPerNetwork[networkIndex],
+					secondPortalCell.endpoint.x,
+					secondPortalCell.endpoint.z,
+					static_cast<uint32_t>(secondPortalCell.sequenceIndex),
+					secondPortalCell.occupant->PieceId(),
+					static_cast<uint32_t>(secondPortalCell.occupant->GetRotationAndFlip()),
+					secondPortalCell.cellInfo->edgesPerNetwork[networkIndex],
+					static_cast<uint32_t>(firstDirection),
+					static_cast<uint32_t>(secondDirection));
+				TracePathMap("first lane before stitch", firstPortalCell.tunnel);
+				TracePathMap("second lane before stitch", secondPortalCell.tunnel);
+			}
 
 			SetOtherEndOccupant(firstPortalCell.tunnel, secondPortalCell.occupant);
 			SetOtherEndOccupant(secondPortalCell.tunnel, firstPortalCell.occupant);
@@ -1414,7 +1800,8 @@ namespace
 				InferTunnelPieceDirection(secondPortalCell.endpoint, firstPortalCell.endpoint);
 			const bool requiresCustomPathStitch =
 				firstDirection != pairedFirstVectorDirection
-				|| secondDirection != pairedSecondVectorDirection;
+					|| secondDirection != pairedSecondVectorDirection;
+			const bool requiresTwoTilePathKeyResolution = portalCellCount > 1;
 
 			if (requiresCustomPathStitch)
 			{
@@ -1425,24 +1812,40 @@ namespace
 					secondPortalCell.endpoint,
 					firstPathDirection,
 					secondPathDirection);
+			}
+
+			if (requiresCustomPathStitch || requiresTwoTilePathKeyResolution)
+			{
+				const uint8_t firstPathDirection = TunnelPieceDirectionToPathDirection(firstDirection);
+				const uint8_t secondPathDirection = TunnelPieceDirectionToPathDirection(secondDirection);
+				const uint16_t firstPeerLookup = requiresTwoTilePathKeyResolution
+					? kAutomaticPeerPathLookup
+					: TunnelPathKeyLowWord(secondPathDirection);
+				const uint16_t secondPeerLookup = requiresTwoTilePathKeyResolution
+					? kAutomaticPeerPathLookup
+					: TunnelPathKeyLowWord(firstPathDirection);
 				RefreshTunnelPathInfo(
 					firstPortalCell.tunnel,
 					secondPortalCell.tunnel,
 					firstPathDirection,
-					TunnelPathKeyLowWord(secondPathDirection));
+					firstPeerLookup);
 				RefreshTunnelPathInfo(
 					secondPortalCell.tunnel,
 					firstPortalCell.tunnel,
 					secondPathDirection,
-					TunnelPathKeyLowWord(firstPathDirection));
+					secondPeerLookup);
 			}
 			else
 			{
-				// For native-compatible geometry, let MakeTunnelPaths use each
-				// full path key unchanged. This preserves Avenue/Highway lane
-				// and travel-mode key fields.
+				// A native-compatible single-tile pair can use each full path
+				// key unchanged.
 				RefreshTunnelPathInfo(firstPortalCell.tunnel, secondPortalCell.tunnel);
 				RefreshTunnelPathInfo(secondPortalCell.tunnel, firstPortalCell.tunnel);
+			}
+			if (portalCellCount > 1)
+			{
+				TracePathMap("first lane after stitch", firstPortalCell.tunnel);
+				TracePathMap("second lane after stitch", secondPortalCell.tunnel);
 			}
 			MarkNetworkOccupantUsable(firstPortalCell.occupant, "first");
 			MarkNetworkOccupantUsable(secondPortalCell.occupant, "second");

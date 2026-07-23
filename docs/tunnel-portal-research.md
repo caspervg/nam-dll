@@ -845,10 +845,6 @@ The custom tool now mirrors that shape for likely two-tile networks:
 - link, refresh path info, register tunnel edge rewrites, mark usable, and
   notify the traffic simulator per matched tile pair.
 
-This is intentionally still conservative: if a two-tile endpoint does not
-resolve an adjacent same-structure tile, the tool logs that and falls back to
-the one-tile path rather than inventing an unrelated neighbor.
-
 A native Avenue trace clarified two details:
 
 - east-facing endpoint sequence order was `(26,109) seq=0`,
@@ -857,12 +853,137 @@ A native Avenue trace clarified two details:
 - the physical lower/upper Avenue lanes used distinct edge masks:
   `0x04020002` and `0x00020402`.
 
-The custom sequence ordering now follows the native direction-dependent
-ordering, and two-tile cell preparation uses the lane-specific edge masks
-instead of the single-tile all-axis mask.
+### 2026-07-23 native lane pairing and path restoration
 
-Lane linking still needs more research. The current code intentionally uses the
-simple equal-sequence pairing again because that was the version where Avenue
-portal occupants were visible and correctly shaped. Later physical-lane and
-geometry-scored pairing experiments changed the crossing behavior but did not
-produce usable Avenue tunnel traffic.
+Rechecking both the symbolized Mac implementation and Windows 1.1.641 exposed
+the missing pairing rule. Native `InsertTunnelPieces` pushes the first-side
+occupants in sequence order, then calls `back()` / `pop_back()` after inserting
+each second-side occupant. Windows performs the equivalent list-tail removal
+immediately after the second `InsertTunnelPiece` call at `0x00628A81`.
+
+For an east/west two-tile portal, direction-dependent sequence ordering already
+reverses the second side. The additional LIFO association therefore links equal
+physical lanes:
+
+- first sequence `1` to second sequence `0`;
+- first sequence `0` to second sequence `1`.
+
+Equal-sequence linking crossed the two physical lanes and caused every
+downstream `otherEnd`, path-info, and traffic-simulator record to refer to the
+wrong peer cell. The custom tool now mirrors the native LIFO association.
+
+Other corrections made with that change:
+
+- live Avenue testing showed that its two ordinary carriageways are separate
+  occupants and do not report `IsPartOfTheSameStructure`. Companion discovery
+  therefore accepts either a same-structure occupant or an adjacent tile that
+  faces the same portal direction and has reciprocal cross-axis connections.
+  Missing or ambiguous companions still reject placement instead of falling
+  back to a single portal tile;
+- existing cell edge topology is retained. Native `InsertTunnelPieces` marks
+  byte `+0x51`, while network-specific topology comes from solved cells.
+  Avenue trace masks are no longer imposed on Highway, Ground Highway, or
+  perpendicular portals;
+- Highway is included in input-tool network discovery;
+- native-compatible pairs use `MakeTunnelPaths` without overriding their full
+  path keys. Custom-facing pairs use deterministic direction-derived low words
+  rather than selecting one arbitrary path from the path hash table;
+- `RefreshCity` reconstructs both route-edge fixes and custom path stitching
+  after Windows `cSC4TrafficNetworkMap::InitializeTunnelPaths` calls vtable slot
+  `+0x80` without the custom facing context.
+
+### 2026-07-23 Avenue orientation and path-key follow-up
+
+Live testing showed two remaining two-tile failures: some custom orientation
+combinations associated the wrong physical lanes, and Avenue tunnel paths were
+not drawn even when the portal occupants linked successfully.
+
+The symbolized Mac `InsertTunnelPiece` confirms that `sequenceIndex` selects
+parallel tunnel arrays at network-tool offsets `+0x324`, `+0x330`, and `+0x33c`
+(exemplar, rotation adjustment, and height). Native `InsertTunnelPieces` uses
+LIFO endpoint association, but its input is restricted to straight,
+opposite-facing tunnels. Applying LIFO unconditionally to same-facing or
+perpendicular custom portals can cross the carriageways. Two-tile custom
+pairing now chooses the association with the smaller total endpoint distance,
+using native LIFO only on a tie.
+
+The Mac `cISC4PathInfo::GetUniquePathKey` and `ExtractFullPathKey` functions
+confirm the 32-bit path-key layout:
+
+- bits `31..28`: key type;
+- bits `27..24`: path type;
+- bits `23..16`: per-path uniqueness index;
+- bits `15..8`: entry direction;
+- bits `7..0`: exit direction.
+
+Windows `MakeTunnelPaths` performs an exact 32-bit lookup on the peer. The
+existing hook changed only the direction low word, assuming the uniqueness
+index matched at both occupants. Avenue halves can enumerate otherwise
+compatible paths with different uniqueness bytes, causing the peer lookup to
+return null and preventing both path drawing and UDI traversal. The peer hook
+now tries the native-compatible exact key first, then resolves a non-empty peer
+path with the same key/path type and requested direction pair while accepting
+the peer's actual uniqueness byte.
+
+The first runtime pass disproved uniqueness-byte mismatch as the primary
+failure. Saved Avenue portals produced exact peer lookups, while newly created
+portals showed an asymmetric pattern per physical lane: one refresh direction
+had no matching local paths and the other had two local paths whose assumed
+peer direction pair did not exist. A bounded diagnostic dump now records, for
+each paired lane before and after stitching:
+
+- endpoint, sequence, piece ID, rotation/flip, edge mask, and portal direction;
+- every path key decoded into key type, path type, uniqueness index, entry, and
+  exit direction;
+- point count plus first and last 3D points;
+- unresolved original lookup keys and the requested peer low word.
+
+This evidence is intended to replace the remaining fixed
+`TunnelPathKeyLowWord` assumption with a mapping derived from the actual
+Avenue portal paths.
+
+The captured west/east Avenue pair provided the decisive mapping:
+
+- one physical carriageway contained only `entry=2, exit=0` paths;
+- the other contained only `entry=0, exit=2` paths;
+- corresponding occupants at the two portals already had identical full keys,
+  including their uniqueness bytes.
+
+This is expected one-way Avenue behavior. For each physical lane pair, only
+one of the two `MakeTunnelPaths` calls has local paths matching the forced
+outgoing direction. The prior fixed peer-low-word rewrite changed a valid
+`0x0200` lookup to nonexistent `0x0002`, and vice versa, preventing any point
+from being appended.
+
+Two-tile refresh now uses automatic peer lookup: preserve the original exact
+32-bit key whenever it exists; only if it is absent, choose the geometrically
+closest non-empty peer path with the same key/path type. Single-tile
+mixed-facing portals retain the explicit peer-direction rewrite that was
+validated for Road and Rail.
+
+A perpendicular Avenue trace then showed why geometry alone is insufficient
+inside one physical carriageway. Each Avenue portal occupant has two parallel
+paths with uniqueness indices `1` and `2`. The first automatic implementation
+mapped both source paths to whichever peer path had the closest first point,
+merging both lanes onto one peer path. Automatic lookup now preserves the
+uniqueness index when the peer offers it and uses geometric proximity only as
+a fallback. Thus source unique `1` maps to peer unique `1`, and source unique
+`2` maps to peer unique `2`.
+
+The accompanying in-game path-overlay screenshot also exposed a model-level
+sequence error: for north/south portals, the left and right portal halves were
+swapped before any lane association or path stitching occurred. The earlier
+vertical ordering rule had only been extrapolated from the native east/west
+trace and used the wrong rotation transform.
+
+The confirmed east/west ordering means sequence `0` is the physical left half
+when facing into the tunnel:
+
+- east: ascending Z;
+- west: descending Z;
+- north: ascending X;
+- south: descending X.
+
+`UseAscendingTwoTileSequence` now applies that rotated left/right rule. This
+changes the vertical portal exemplar/rotation selection while leaving geometric
+endpoint pairing and path-key stitching independent.
