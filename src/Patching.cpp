@@ -206,12 +206,14 @@ void Patching::UninstallInlineHook(InlineHook& hook)
 
 	auto* const target = reinterpret_cast<uint8_t*>(hook.patchAddress);
 	DWORD oldProtect;
-	if (VirtualProtect(target, kInlineHookPatchByteCount, PAGE_EXECUTE_READWRITE, &oldProtect))
+	if (!VirtualProtect(target, kInlineHookPatchByteCount, PAGE_EXECUTE_READWRITE, &oldProtect))
 	{
-		std::memcpy(target, hook.original.data(), hook.original.size());
-		FlushInstructionCache(GetCurrentProcess(), target, kInlineHookPatchByteCount);
-		VirtualProtect(target, kInlineHookPatchByteCount, oldProtect, &oldProtect);
+		// Keep the trampoline alive while the hook still points into the DLL.
+		return;
 	}
+	std::memcpy(target, hook.original.data(), hook.original.size());
+	FlushInstructionCache(GetCurrentProcess(), target, kInlineHookPatchByteCount);
+	VirtualProtect(target, kInlineHookPatchByteCount, oldProtect, &oldProtect);
 
 	if (hook.trampoline)
 	{

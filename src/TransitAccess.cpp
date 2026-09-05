@@ -14,10 +14,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <Windows.h>
+#include "wil/resource.h"
 
 namespace
 {
@@ -62,58 +62,6 @@ namespace TransitAccess
 	bool __fastcall HookSetupPathFinderForLot(void* trafficSimulator, void*, void* pathFinder, cISC4Lot* lot)
 	{
 		return sPatch.SetupPathFinderForLot(trafficSimulator, pathFinder, lot);
-	}
-}
-
-namespace TransitAccess
-{
-	TransitAccessPatch::ScopedPathFinderSourceLotRecordErase::ScopedPathFinderSourceLotRecordErase(
-		TransitAccessPatch& patch,
-		void* pathFinder) :
-		patch(patch),
-		pathFinder(pathFinder)
-	{
-	}
-
-	TransitAccessPatch::ScopedPathFinderSourceLotRecordErase::~ScopedPathFinderSourceLotRecordErase()
-	{
-		patch.EraseRecordedSourceLotForPathFinder(pathFinder);
-	}
-
-	void TransitAccessPatch::RecordSourceLotForPathFinder(void* pathFinder, cISC4Lot* lot)
-	{
-		if (!pathFinder || !lot)
-		{
-			return;
-		}
-
-		pathFinderSourceLots[pathFinder] = lot;
-	}
-
-	cISC4Lot* TransitAccessPatch::FindRecordedSourceLotForPathFinder(void* pathFinder)
-	{
-		if (!pathFinder)
-		{
-			return nullptr;
-		}
-
-		const auto it = pathFinderSourceLots.find(pathFinder);
-		return it != pathFinderSourceLots.end() ? it->second : nullptr;
-	}
-
-	void TransitAccessPatch::EraseRecordedSourceLotForPathFinder(void* pathFinder)
-	{
-		if (!pathFinder)
-		{
-			return;
-		}
-
-		pathFinderSourceLots.erase(pathFinder);
-	}
-
-	void TransitAccessPatch::ClearRecordedSourceLots()
-	{
-		pathFinderSourceLots.clear();
 	}
 
 	bool TransitAccessPatch::GetLotSubnetworks(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks)
@@ -258,9 +206,7 @@ namespace TransitAccess
 			return false;
 		}
 
-		std::vector<cISC4Lot*> candidates;
-		std::unordered_set<cISC4Lot*> seenCandidates;
-		CollectAdjacentTransitEnabledRoadAccessLots(sourceLot, candidates, seenCandidates);
+		const auto candidates = GetAdjacentTransitEnabledRoadAccessLots(sourceLot);
 		if (candidates.empty())
 		{
 			return false;
@@ -277,9 +223,9 @@ namespace TransitAccess
 				continue;
 			}
 
+			const auto restoreRect = wil::scope_exit([&] { SetPathFinderSourceRect(pathFinder, originalRect); });
 			SetPathFinderSourceRect(pathFinder, candidateBounds);
 			const bool retrySucceeded = originalCreateStartNodes && originalCreateStartNodes(pathFinder);
-			SetPathFinderSourceRect(pathFinder, originalRect);
 
 			if (retrySucceeded)
 			{
@@ -362,13 +308,7 @@ namespace TransitAccess
 		}
 
 		// Purpose 0/1 are the commute destination queries affected by road access.
-		const uint32_t fallbackCount = GetAdjacentTransitEnabledDestinationCount(trafficSimulator, lot, purpose);
-		if (fallbackCount != 0)
-		{
-			return fallbackCount;
-		}
-
-		return 0;
+		return GetAdjacentTransitEnabledDestinationCount(trafficSimulator, lot, purpose);
 	}
 
 	bool TransitAccessPatch::CreateStartNodes(void* pathFinder)
@@ -378,7 +318,7 @@ namespace TransitAccess
 			return false;
 		}
 
-		ScopedPathFinderSourceLotRecordErase sourceLotRecordErase(*this, pathFinder);
+		const auto sourceLotRecord = pathFinderSourceLots.extract(pathFinder);
 		if (originalCreateStartNodes && originalCreateStartNodes(pathFinder))
 		{
 			return true;
@@ -391,7 +331,7 @@ namespace TransitAccess
 
 		// The retry is deliberately last: if the vanilla source lot can create
 		// pathfinder start nodes, the patch leaves that result untouched.
-		cISC4Lot* sourceLot = FindRecordedSourceLotForPathFinder(pathFinder);
+		cISC4Lot* sourceLot = sourceLotRecord.empty() ? nullptr : sourceLotRecord.mapped();
 		if (!sourceLot)
 		{
 			sourceLot = FindSourceLotForPathFinder(pathFinder);
@@ -401,7 +341,8 @@ namespace TransitAccess
 			return false;
 		}
 
-		ScopedBoolFlag retryGuard(insideCreateStartNodesRetry);
+		const auto retryGuard = wil::scope_exit([&] { insideCreateStartNodesRetry = false; });
+		insideCreateStartNodesRetry = true;
 		return RetryCreateStartNodesThroughTransitEnabledLot(pathFinder, sourceLot);
 	}
 
@@ -414,11 +355,11 @@ namespace TransitAccess
 		// short-lived association so the retry can recover the source lot cheaply.
 		if (setupSucceeded && pathFinder && lot)
 		{
-			RecordSourceLotForPathFinder(pathFinder, lot);
+			pathFinderSourceLots[pathFinder] = lot;
 		}
 		else
 		{
-			EraseRecordedSourceLotForPathFinder(pathFinder);
+			pathFinderSourceLots.erase(pathFinder);
 		}
 
 		return setupSucceeded;
@@ -449,35 +390,20 @@ namespace TransitAccess
 		void** const subnetworksSlot = &vtable[kGetSubnetworksForLotVTableIndex];
 		trafficSimulatorVTable = vtable;
 
+		// Both slots are adjacent. Make them writable together so installation
+		// cannot leave only one hook installed.
 		DWORD oldProtect;
-		if (*destinationSlot != reinterpret_cast<void*>(&HookGetConnectedDestinationCount))
+		constexpr size_t slotBytes = 2 * sizeof(void*);
+		if (!VirtualProtect(destinationSlot, slotBytes, PAGE_EXECUTE_READWRITE, &oldProtect))
 		{
-			if (!VirtualProtect(destinationSlot, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
-			{
-				return false;
-			}
-
-			originalGetConnectedDestinationCountSlot = *destinationSlot;
-			originalGetConnectedDestinationCount =
-				reinterpret_cast<GetConnectedDestinationCountFn>(originalGetConnectedDestinationCountSlot);
-			*destinationSlot = reinterpret_cast<void*>(&HookGetConnectedDestinationCount);
-			FlushInstructionCache(GetCurrentProcess(), destinationSlot, sizeof(void*));
-			VirtualProtect(destinationSlot, sizeof(void*), oldProtect, &oldProtect);
+			return false;
 		}
 
-		if (*subnetworksSlot != reinterpret_cast<void*>(&HookGetSubnetworksForLot))
-		{
-			if (!VirtualProtect(subnetworksSlot, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
-			{
-				return false;
-			}
-
-			originalGetSubnetworksForLotSlot = *subnetworksSlot;
-			originalGetSubnetworksForLot = reinterpret_cast<GetSubnetworksForLotFn>(originalGetSubnetworksForLotSlot);
-			*subnetworksSlot = reinterpret_cast<void*>(&HookGetSubnetworksForLot);
-			FlushInstructionCache(GetCurrentProcess(), subnetworksSlot, sizeof(void*));
-			VirtualProtect(subnetworksSlot, sizeof(void*), oldProtect, &oldProtect);
-		}
+		originalGetConnectedDestinationCount = reinterpret_cast<GetConnectedDestinationCountFn>(*destinationSlot);
+		originalGetSubnetworksForLot = reinterpret_cast<GetSubnetworksForLotFn>(*subnetworksSlot);
+		*destinationSlot = reinterpret_cast<void*>(&HookGetConnectedDestinationCount);
+		*subnetworksSlot = reinterpret_cast<void*>(&HookGetSubnetworksForLot);
+		VirtualProtect(destinationSlot, slotBytes, oldProtect, &oldProtect);
 
 		trafficSimulatorHookInstalled = true;
 		return true;
@@ -490,39 +416,27 @@ namespace TransitAccess
 			return;
 		}
 
+		void** const destinationSlot = &trafficSimulatorVTable[kGetConnectedDestinationCountVTableIndex];
+		void** const subnetworksSlot = &trafficSimulatorVTable[kGetSubnetworksForLotVTableIndex];
 		DWORD oldProtect;
-		if (originalGetConnectedDestinationCountSlot)
+		constexpr size_t slotBytes = 2 * sizeof(void*);
+		if (!VirtualProtect(destinationSlot, slotBytes, PAGE_EXECUTE_READWRITE, &oldProtect))
 		{
-			void** const destinationSlot = &trafficSimulatorVTable[kGetConnectedDestinationCountVTableIndex];
-			if (VirtualProtect(destinationSlot, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
-			{
-				if (*destinationSlot == reinterpret_cast<void*>(&HookGetConnectedDestinationCount))
-				{
-					*destinationSlot = originalGetConnectedDestinationCountSlot;
-					FlushInstructionCache(GetCurrentProcess(), destinationSlot, sizeof(void*));
-				}
-				VirtualProtect(destinationSlot, sizeof(void*), oldProtect, &oldProtect);
-			}
+			return;
 		}
 
-		if (originalGetSubnetworksForLotSlot)
+		if (*destinationSlot == reinterpret_cast<void*>(&HookGetConnectedDestinationCount))
 		{
-			void** const subnetworksSlot = &trafficSimulatorVTable[kGetSubnetworksForLotVTableIndex];
-			if (VirtualProtect(subnetworksSlot, sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProtect))
-			{
-				if (*subnetworksSlot == reinterpret_cast<void*>(&HookGetSubnetworksForLot))
-				{
-					*subnetworksSlot = originalGetSubnetworksForLotSlot;
-					FlushInstructionCache(GetCurrentProcess(), subnetworksSlot, sizeof(void*));
-				}
-				VirtualProtect(subnetworksSlot, sizeof(void*), oldProtect, &oldProtect);
-			}
+			*destinationSlot = reinterpret_cast<void*>(originalGetConnectedDestinationCount);
 		}
+		if (*subnetworksSlot == reinterpret_cast<void*>(&HookGetSubnetworksForLot))
+		{
+			*subnetworksSlot = reinterpret_cast<void*>(originalGetSubnetworksForLot);
+		}
+		VirtualProtect(destinationSlot, slotBytes, oldProtect, &oldProtect);
 
 		trafficSimulatorVTable = nullptr;
-		originalGetConnectedDestinationCountSlot = nullptr;
 		originalGetConnectedDestinationCount = nullptr;
-		originalGetSubnetworksForLotSlot = nullptr;
 		originalGetSubnetworksForLot = nullptr;
 		trafficSimulatorHookInstalled = false;
 	}
@@ -545,12 +459,12 @@ namespace TransitAccess
 	{
 		UninstallTrafficSimulatorHook();
 		Patching::UninstallInlineHook(setupPathFinderForLotHook);
-		originalSetupPathFinderForLot = nullptr;
+		originalSetupPathFinderForLot = reinterpret_cast<SetupPathFinderForLotFn>(setupPathFinderForLotHook.trampoline);
 		Patching::UninstallInlineHook(createStartNodesHook);
-		originalCreateStartNodes = nullptr;
+		originalCreateStartNodes = reinterpret_cast<CreateStartNodesFn>(createStartNodesHook.trampoline);
 		Patching::UninstallInlineHook(calculateRoadAccessHook);
-		originalCalculateRoadAccess = nullptr;
-		ClearRecordedSourceLots();
+		originalCalculateRoadAccess = reinterpret_cast<CalculateRoadAccessFn>(calculateRoadAccessHook.trampoline);
+		pathFinderSourceLots.clear();
 	}
 }
 

@@ -11,7 +11,7 @@ class cISC4TrafficSimulator;
 
 namespace TransitAccess
 {
-	// The naked hooks stay as free functions so the patch can use the game's
+	// The hooks stay as free functions so the patch can use the game's
 	// calling conventions and immediately delegate into the stateful patch class.
 	bool __fastcall HookCalculateRoadAccess(cISC4Lot* lot, void*);
 	bool __fastcall HookGetSubnetworksForLot(cISC4TrafficSimulator* trafficSimulator, void*, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks);
@@ -24,21 +24,6 @@ namespace TransitAccess
 	// nodes from adjacent transit-enabled lots when the vanilla result is empty.
 	class TransitAccessPatch final
 	{
-		class ScopedPathFinderSourceLotRecordErase
-		{
-		public:
-			ScopedPathFinderSourceLotRecordErase(TransitAccessPatch& patch, void* pathFinder);
-			ScopedPathFinderSourceLotRecordErase(const ScopedPathFinderSourceLotRecordErase&) = delete;
-			ScopedPathFinderSourceLotRecordErase& operator=(const ScopedPathFinderSourceLotRecordErase&) = delete;
-			~ScopedPathFinderSourceLotRecordErase();
-
-		private:
-			TransitAccessPatch& patch;
-			void* pathFinder;
-		};
-
-		friend class ScopedPathFinderSourceLotRecordErase;
-
 	public:
 		void Install();
 		void Shutdown();
@@ -55,11 +40,6 @@ namespace TransitAccess
 		using SetupPathFinderForLotFn = bool(__thiscall*)(void*, void*, cISC4Lot*);
 		using GetConnectedDestinationCountFn = uint32_t(__thiscall*)(cISC4TrafficSimulator*, cISC4Lot*, int);
 		using GetSubnetworksForLotFn = bool(__thiscall*)(cISC4TrafficSimulator*, cISC4Lot*, SC4Vector<uint32_t>&);
-
-		void RecordSourceLotForPathFinder(void* pathFinder, cISC4Lot* lot);
-		cISC4Lot* FindRecordedSourceLotForPathFinder(void* pathFinder);
-		void EraseRecordedSourceLotForPathFinder(void* pathFinder);
-		void ClearRecordedSourceLots();
 
 		bool InstallTrafficSimulatorHook();
 		void UninstallTrafficSimulatorHook();
@@ -82,41 +62,27 @@ namespace TransitAccess
 		bool insideCreateStartNodesRetry = false;
 
 		void** trafficSimulatorVTable = nullptr;
-		void* originalGetConnectedDestinationCountSlot = nullptr;
-		void* originalGetSubnetworksForLotSlot = nullptr;
 		bool trafficSimulatorHookInstalled = false;
 
 		Patching::InlineHook calculateRoadAccessHook{
 			.address = 0x006c1a30,
 			.hookFunction = reinterpret_cast<void*>(&HookCalculateRoadAccess),
 			.expectedPrologue = {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8},
-			.hasExpectedPrologue = true,
-			.patchAddress = 0,
-			.original = {},
-			.trampoline = nullptr,
-			.installed = false
+			.hasExpectedPrologue = true
 		};
 
 		Patching::InlineHook createStartNodesHook{
 			.address = 0x006d8a90,
 			.hookFunction = reinterpret_cast<void*>(&HookCreateStartNodes),
 			.expectedPrologue = {0x83, 0xec, 0x5c, 0x53, 0x55, 0x56},
-			.hasExpectedPrologue = true,
-			.patchAddress = 0,
-			.original = {},
-			.trampoline = nullptr,
-			.installed = false
+			.hasExpectedPrologue = true
 		};
 
 		Patching::InlineHook setupPathFinderForLotHook{
 			.address = 0x00711610,
 			.hookFunction = reinterpret_cast<void*>(&HookSetupPathFinderForLot),
 			.expectedPrologue = {0x83, 0xec, 0x14, 0x53, 0x55, 0x56},
-			.hasExpectedPrologue = true,
-			.patchAddress = 0,
-			.original = {},
-			.trampoline = nullptr,
-			.installed = false
+			.hasExpectedPrologue = true
 		};
 	};
 

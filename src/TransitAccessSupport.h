@@ -62,19 +62,6 @@ namespace TransitAccessSupport
 		return city ? reinterpret_cast<void*>(city->GetTrafficNetwork()) : nullptr;
 	}
 
-	inline bool RectsTouchBySide(const SC4Rect<int32_t>& a, const SC4Rect<int32_t>& b)
-	{
-		const bool zRangesOverlap = a.topLeftY <= b.bottomRightY && b.topLeftY <= a.bottomRightY;
-		const bool xRangesOverlap = a.topLeftX <= b.bottomRightX && b.topLeftX <= a.bottomRightX;
-
-		if (zRangesOverlap && (a.bottomRightX + 1 == b.topLeftX || b.bottomRightX + 1 == a.topLeftX))
-		{
-			return true;
-		}
-
-		return xRangesOverlap && (a.bottomRightY + 1 == b.topLeftY || b.bottomRightY + 1 == a.topLeftY);
-	}
-
 	inline bool RectsTouchOrNearlyTouchBySide(const SC4Rect<int32_t>& a, const SC4Rect<int32_t>& b, int32_t maxGapCells)
 	{
 		const bool zRangesOverlap = a.topLeftY <= b.bottomRightY && b.topLeftY <= a.bottomRightY;
@@ -115,24 +102,6 @@ namespace TransitAccessSupport
 	{
 		return rect.topLeftX <= rect.bottomRightX && rect.topLeftY <= rect.bottomRightY;
 	}
-
-	struct ScopedBoolFlag
-	{
-		explicit ScopedBoolFlag(bool& flag) : flag(flag)
-		{
-			flag = true;
-		}
-
-		ScopedBoolFlag(const ScopedBoolFlag&) = delete;
-		ScopedBoolFlag& operator=(const ScopedBoolFlag&) = delete;
-
-		~ScopedBoolFlag()
-		{
-			flag = false;
-		}
-
-		bool& flag;
-	};
 
 	inline bool IsResidentialZoneType(cISC4ZoneManager::ZoneType zoneType)
 	{
@@ -369,47 +338,26 @@ namespace TransitAccessSupport
 		}
 	}
 
-	inline void CollectAdjacentTransitEnabledRoadAccessLots(
-		cISC4Lot* lot,
-		std::vector<cISC4Lot*>& matches,
-		std::unordered_set<cISC4Lot*>& seenMatches)
+	inline std::vector<cISC4Lot*> GetAdjacentTransitEnabledRoadAccessLots(cISC4Lot* lot)
 	{
-		if (!lot || !IsResidentialSourceLot(lot))
+		std::vector<cISC4Lot*> matches;
+		if (IsResidentialSourceLot(lot))
 		{
-			return;
-		}
-
-		SC4Rect<int32_t> sourceBounds;
-		if (!lot->GetBoundingRect(sourceBounds))
-		{
-			return;
-		}
-
-		const std::vector<cISC4Lot*> candidates = GetNearbySideLots(lot, 0);
-		for (cISC4Lot* candidate : candidates)
-		{
-			SC4Rect<int32_t> candidateBounds;
-			if (!candidate->GetBoundingRect(candidateBounds) || !RectsTouchBySide(sourceBounds, candidateBounds))
+			// GetNearbySideLots already filters and deduplicates side-adjacent lots.
+			for (cISC4Lot* candidate : GetNearbySideLots(lot, 0))
 			{
-				continue;
-			}
-
-			if (IsTransitEnabledLot(candidate) && HasRoadLikeNetworkOnOrAroundLot(candidate))
-			{
-				if (seenMatches.insert(candidate).second)
+				if (IsTransitEnabledLot(candidate) && HasRoadLikeNetworkOnOrAroundLot(candidate))
 				{
 					matches.push_back(candidate);
 				}
 			}
 		}
+		return matches;
 	}
 
 	inline bool HasAdjacentTransitEnabledRoadAccess(cISC4Lot* lot)
 	{
-		std::vector<cISC4Lot*> matches;
-		std::unordered_set<cISC4Lot*> seenMatches;
-		CollectAdjacentTransitEnabledRoadAccessLots(lot, matches, seenMatches);
-		return !matches.empty();
+		return !GetAdjacentTransitEnabledRoadAccessLots(lot).empty();
 	}
 
 	inline int32_t ReadPathFinderInt32(void* pathFinder, ptrdiff_t offset)
