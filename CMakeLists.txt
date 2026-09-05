@@ -33,6 +33,7 @@ set(NAM_SOURCES
     src/Rul2Engine.cpp
     src/SC4VersionDetection.cpp
     src/Settings.cpp
+    src/TransitAccess.cpp
     src/version.rc
 )
 
