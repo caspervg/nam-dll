@@ -167,7 +167,6 @@ void Patching::InstallInlineHook(InlineHook& hook)
 			kInlineHookPatchByteCount + kJumpByteCount,
 			PAGE_EXECUTE_READ,
 			&trampolineOldProtect));
-		FlushInstructionCache(GetCurrentProcess(), trampoline, kInlineHookPatchByteCount + kJumpByteCount);
 
 		DWORD oldProtect;
 		THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(
@@ -183,7 +182,6 @@ void Patching::InstallInlineHook(InlineHook& hook)
 			target[i] = 0x90;
 		}
 
-		FlushInstructionCache(GetCurrentProcess(), target, kInlineHookPatchByteCount);
 		VirtualProtect(target, kInlineHookPatchByteCount, oldProtect, &oldProtect);
 
 		hook.trampoline = trampoline;
@@ -211,7 +209,6 @@ void Patching::UninstallInlineHook(InlineHook& hook)
 		return;
 	}
 	std::memcpy(target, hook.original.data(), hook.original.size());
-	FlushInstructionCache(GetCurrentProcess(), target, kInlineHookPatchByteCount);
 	VirtualProtect(target, kInlineHookPatchByteCount, oldProtect, &oldProtect);
 
 	if (hook.trampoline)
