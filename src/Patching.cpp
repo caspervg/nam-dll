@@ -12,35 +12,6 @@ namespace
 {
 	constexpr size_t kJumpByteCount = 5;
 
-	uint32_t ResolvePatchAddress(uint32_t address)
-	{
-		uint32_t current = address;
-		for (int i = 0; i < 6; ++i)
-		{
-			const auto* const p = reinterpret_cast<const uint8_t*>(current);
-			if (p[0] == 0xe9)
-			{
-				const auto rel = *reinterpret_cast<const int32_t*>(p + 1);
-				current = current + 5 + rel;
-				continue;
-			}
-			if (p[0] == 0xeb)
-			{
-				const auto rel = static_cast<int8_t>(p[1]);
-				current = current + 2 + rel;
-				continue;
-			}
-			if (p[0] == 0xff && p[1] == 0x25)
-			{
-				const auto mem = *reinterpret_cast<const uint32_t*>(p + 2);
-				current = *reinterpret_cast<const uint32_t*>(mem);
-				continue;
-			}
-			break;
-		}
-		return current;
-	}
-
 	int32_t GetRelativeJumpOffset(uint32_t from, uint32_t to)
 	{
 		const auto delta = static_cast<intptr_t>(to) - static_cast<intptr_t>(from + kJumpByteCount);
@@ -129,14 +100,13 @@ void Patching::InstallInlineHook(InlineHook& hook)
 		return;
 	}
 
-	hook.patchAddress = ResolvePatchAddress(hook.address);
-	auto* const target = reinterpret_cast<uint8_t*>(hook.patchAddress);
+	auto* const target = reinterpret_cast<uint8_t*>(hook.address);
 
-	if (hook.hasExpectedPrologue)
+	if (hook.checkExpectedBytes)
 	{
 		THROW_HR_IF(
 			E_FAIL,
-			std::memcmp(target, hook.expectedPrologue.data(), hook.expectedPrologue.size()) != 0);
+			std::memcmp(target, hook.expectedBytes.data(), hook.expectedBytes.size()) != 0);
 	}
 
 	std::memcpy(hook.original.data(), target, hook.original.size());
@@ -175,6 +145,8 @@ void Patching::InstallInlineHook(InlineHook& hook)
 			PAGE_EXECUTE_READWRITE,
 			&oldProtect));
 
+		hook.trampoline = trampoline;
+
 		target[0] = 0xe9;
 		std::memcpy(target + 1, &hookRel, sizeof(hookRel));
 		for (size_t i = kJumpByteCount; i < kInlineHookPatchByteCount; ++i)
@@ -184,39 +156,37 @@ void Patching::InstallInlineHook(InlineHook& hook)
 
 		VirtualProtect(target, kInlineHookPatchByteCount, oldProtect, &oldProtect);
 
-		hook.trampoline = trampoline;
 		hook.installed = true;
 	}
 	catch (...)
 	{
+		hook.trampoline = nullptr;
 		VirtualFree(trampoline, 0, MEM_RELEASE);
 		throw;
 	}
 }
 
-void Patching::UninstallInlineHook(InlineHook& hook)
+void Patching::InstallVTableHook(VTableHook& hook)
 {
-	if (!hook.installed)
+	if (hook.installed)
 	{
 		return;
 	}
 
-	auto* const target = reinterpret_cast<uint8_t*>(hook.patchAddress);
+	auto* const slot = reinterpret_cast<void**>(hook.slotAddress);
+	THROW_HR_IF(E_FAIL, reinterpret_cast<uint32_t>(*slot) != hook.expectedOriginal);
+
 	DWORD oldProtect;
-	if (!VirtualProtect(target, kInlineHookPatchByteCount, PAGE_EXECUTE_READWRITE, &oldProtect))
-	{
-		// Keep the trampoline alive while the hook still points into the DLL.
-		return;
-	}
-	std::memcpy(target, hook.original.data(), hook.original.size());
-	VirtualProtect(target, kInlineHookPatchByteCount, oldProtect, &oldProtect);
+	THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(
+		slot,
+		sizeof(void*),
+		PAGE_EXECUTE_READWRITE,
+		&oldProtect));
 
-	if (hook.trampoline)
-	{
-		VirtualFree(hook.trampoline, 0, MEM_RELEASE);
-	}
+	// Publish the original before the slot starts routing calls into the hook.
+	hook.original = *slot;
+	*slot = hook.hookFunction;
+	VirtualProtect(slot, sizeof(void*), oldProtect, &oldProtect);
 
-	hook.patchAddress = 0;
-	hook.trampoline = nullptr;
-	hook.installed = false;
+	hook.installed = true;
 }

@@ -398,12 +398,6 @@ public:
 		return true;
 	}
 
-	bool PostAppShutdown()
-	{
-		TransitAccess::Shutdown();
-		return cRZMessage2COMDirector::PostAppShutdown();
-	}
-
 	bool OnStart(cIGZCOM* pCOM)
 	{
 		settings.Load(GetDllFolderPath() / SettingsFileName);

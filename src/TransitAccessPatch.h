@@ -2,88 +2,93 @@
 
 #include "Patching.h"
 #include "SC4Vector.h"
+#include "TransitAccessSupport.h"
 
 #include <cstdint>
-#include <unordered_map>
 
 class cISC4Lot;
 class cISC4TrafficSimulator;
+class cSC4PathFinder;
 
 namespace TransitAccess
 {
 	// The hooks stay as free functions so the patch can use the game's
 	// calling conventions and immediately delegate into the stateful patch class.
 	bool __fastcall HookCalculateRoadAccess(cISC4Lot* lot, void*);
-	bool __fastcall HookGetSubnetworksForLot(cISC4TrafficSimulator* trafficSimulator, void*, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks);
+	void __fastcall HookGetSubnetworksForLot(cISC4TrafficSimulator* trafficSimulator, void*, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks);
 	uint32_t __fastcall HookGetConnectedDestinationCount(cISC4TrafficSimulator* trafficSimulator, void*, cISC4Lot* lot, int purpose);
-	bool __fastcall HookCreateStartNodes(void* pathFinder, void*);
-	bool __fastcall HookSetupPathFinderForLot(void* trafficSimulator, void*, void* pathFinder, cISC4Lot* lot);
+	bool __fastcall HookCreateStartNodes(cSC4PathFinder* pathFinder, void*);
 
 	// Implements the TE-lot access patch. Residential lots still ask the vanilla
-	// simulator first; the patch only borrows access, subnetworks, and start
-	// nodes from adjacent transit-enabled lots when the vanilla result is empty.
+	// simulator first. The patch only borrows access, subnetworks, destination
+	// counts, and start nodes from adjacent transit-enabled lots when the vanilla
+	// result is negative or empty.
 	class TransitAccessPatch final
 	{
 	public:
 		void Install();
-		void Shutdown();
 
-		bool CalculateRoadAccess(cISC4Lot* lot);
-		bool GetSubnetworksForLot(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks);
-		uint32_t GetConnectedDestinationCount(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, int purpose);
-		bool CreateStartNodes(void* pathFinder);
-		bool SetupPathFinderForLot(void* trafficSimulator, void* pathFinder, cISC4Lot* lot);
+		bool CalculateRoadAccess(cISC4Lot* lot) const;
+		void GetSubnetworksForLot(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks) const;
+		uint32_t GetConnectedDestinationCount(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, int purpose) const;
+		bool CreateStartNodes(cSC4PathFinder* pathFinder) const;
 
 	private:
 		using CalculateRoadAccessFn = bool(__thiscall*)(cISC4Lot*);
-		using CreateStartNodesFn = bool(__thiscall*)(void*);
-		using SetupPathFinderForLotFn = bool(__thiscall*)(void*, void*, cISC4Lot*);
+		using CreateStartNodesFn = bool(__thiscall*)(cSC4PathFinder*);
 		using GetConnectedDestinationCountFn = uint32_t(__thiscall*)(cISC4TrafficSimulator*, cISC4Lot*, int);
-		using GetSubnetworksForLotFn = bool(__thiscall*)(cISC4TrafficSimulator*, cISC4Lot*, SC4Vector<uint32_t>&);
+		using GetSubnetworksForLotFn = void(__thiscall*)(cISC4TrafficSimulator*, cISC4Lot*, SC4Vector<uint32_t>&);
 
-		bool InstallTrafficSimulatorHook();
-		void UninstallTrafficSimulatorHook();
+		bool GetLotSubnetworks(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks) const;
+		bool GatherAdjacentTransitSubnetworks(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks) const;
+		uint32_t GetAdjacentTransitEnabledDestinationCount(cISC4TrafficSimulator* trafficSimulator,
+                    const cISC4Lot * lot, int purpose) const;
+		bool RetryCreateStartNodesThroughTransitEnabledLot(cSC4PathFinder* pathFinder, const cISC4Lot * sourceLot) const;
 
-		bool GetLotSubnetworks(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks);
-		bool GatherAdjacentTransitSubnetworks(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, SC4Vector<uint32_t>& subnetworks);
-		uint32_t GetAdjacentTransitEnabledDestinationCount(cISC4TrafficSimulator* trafficSimulator, cISC4Lot* lot, int purpose);
-		cISC4Lot* FindSourceLotForPathFinder(void* pathFinder);
-		bool RetryCreateStartNodesThroughTransitEnabledLot(void* pathFinder, cISC4Lot* sourceLot);
+		[[nodiscard]] CalculateRoadAccessFn OriginalCalculateRoadAccess() const
+		{
+			return reinterpret_cast<CalculateRoadAccessFn>(calculateRoadAccessHook.trampoline);
+		}
 
-		CalculateRoadAccessFn originalCalculateRoadAccess = nullptr;
-		CreateStartNodesFn originalCreateStartNodes = nullptr;
-		SetupPathFinderForLotFn originalSetupPathFinderForLot = nullptr;
-		GetConnectedDestinationCountFn originalGetConnectedDestinationCount = nullptr;
-		GetSubnetworksForLotFn originalGetSubnetworksForLot = nullptr;
+		[[nodiscard]] CreateStartNodesFn OriginalCreateStartNodes() const
+		{
+			return reinterpret_cast<CreateStartNodesFn>(createStartNodesHook.trampoline);
+		}
 
-		// Path searches can later reach CreateStartNodes with only the pathfinder
-		// pointer. This side table remembers the source lot from SetupPathFinderForLot.
-		std::unordered_map<void*, cISC4Lot*> pathFinderSourceLots;
-		bool insideCreateStartNodesRetry = false;
+		[[nodiscard]] GetConnectedDestinationCountFn OriginalGetConnectedDestinationCount() const
+		{
+			return reinterpret_cast<GetConnectedDestinationCountFn>(getConnectedDestinationCountHook.original);
+		}
 
-		void** trafficSimulatorVTable = nullptr;
-		bool trafficSimulatorHookInstalled = false;
+		[[nodiscard]] GetSubnetworksForLotFn OriginalGetSubnetworksForLot() const
+		{
+			return reinterpret_cast<GetSubnetworksForLotFn>(getSubnetworksForLotHook.original);
+		}
 
 		Patching::InlineHook calculateRoadAccessHook{
 			.address = 0x006c1a30,
 			.hookFunction = reinterpret_cast<void*>(&HookCalculateRoadAccess),
-			.expectedPrologue = {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8},
-			.hasExpectedPrologue = true
+			.expectedBytes = {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xf8},
+			.checkExpectedBytes = true
 		};
 
 		Patching::InlineHook createStartNodesHook{
 			.address = 0x006d8a90,
 			.hookFunction = reinterpret_cast<void*>(&HookCreateStartNodes),
-			.expectedPrologue = {0x83, 0xec, 0x5c, 0x53, 0x55, 0x56},
-			.hasExpectedPrologue = true
+			.expectedBytes = {0x83, 0xec, 0x5c, 0x53, 0x55, 0x56},
+			.checkExpectedBytes = true
 		};
 
-		Patching::InlineHook setupPathFinderForLotHook{
-			.address = 0x00711610,
-			.hookFunction = reinterpret_cast<void*>(&HookSetupPathFinderForLot),
-			.expectedPrologue = {0x83, 0xec, 0x14, 0x53, 0x55, 0x56},
-			.hasExpectedPrologue = true
+		Patching::VTableHook getConnectedDestinationCountHook{
+			.slotAddress = 0x00ab3468,
+			.hookFunction = reinterpret_cast<void*>(&HookGetConnectedDestinationCount),
+			.expectedOriginal = 0x007106c0
+		};
+
+		Patching::VTableHook getSubnetworksForLotHook{
+			.slotAddress = 0x00ab346c,
+			.hookFunction = reinterpret_cast<void*>(&HookGetSubnetworksForLot),
+			.expectedOriginal = 0x00711b50
 		};
 	};
-
 }
