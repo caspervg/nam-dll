@@ -7,13 +7,20 @@
 #include "cS3DCamera.h"
 #include "cS3DVector3.h"
 
+class cS3DTransform
+{
+	public:
+		uint8_t RESERVED[0x38];
+};
+static_assert(sizeof(cS3DTransform) == 0x38);
+
 class SC4DrawAttributes
 {
 	public:
 		enum Flags : uint8_t {
 			kApplyAlpha = 0x02,
 			kSelfLit = 0x04,
-			kDepthGreaterNoWrite = 0x20,  // depth test GREATER, no depth writes: only draws occluded parts
+			kDepthGreaterNoWrite = 0x20,  // only draws where something else is in front
 		};
 
 		uint8_t flags;
@@ -21,13 +28,30 @@ class SC4DrawAttributes
 		float color[3];
 		float alpha;
 };
-static_assert(offsetof(SC4DrawAttributes, alpha) == 0x10);
 static_assert(sizeof(SC4DrawAttributes) == 0x14);
 
-// The gzcom-dll declaration of cIS3DModelInstance::GetDrawAttributes returns a pointer without arguments,
-// but the game returns the struct by value through a hidden out-pointer (callee pops 4 bytes).
-typedef SC4DrawAttributes* (__thiscall* pfn_GetDrawAttributes)(cIS3DModelInstance* pThis, SC4DrawAttributes* pOut);
-constexpr uint32_t kModelInstanceGetDrawAttributesSlot = 0x3c / sizeof(void*);
+// gzcom-dll declares this without arguments, but the game returns the attributes through a hidden out-pointer
+inline SC4DrawAttributes GetDrawAttributes(cIS3DModelInstance* modelInstance)
+{
+	typedef SC4DrawAttributes* (__thiscall* pfn_GetDrawAttributes)(cIS3DModelInstance* pThis, SC4DrawAttributes* out);
+	auto getDrawAttributes = reinterpret_cast<pfn_GetDrawAttributes>((*reinterpret_cast<void***>(modelInstance))[0x3c / 4]);
+	SC4DrawAttributes attributes = {};
+	return *getDrawAttributes(modelInstance, &attributes);
+}
+
+// position is the translation of the camera transform at +0x28, vPos (+0x160) is the look-at target
+inline cS3DVector3 GetCameraPosition(cS3DCamera* camera)
+{
+	return *reinterpret_cast<cS3DVector3*>(reinterpret_cast<uint8_t*>(camera) + 0x50);
+}
+
+class SC4DrawContext
+{
+	public:
+		uint8_t RESERVED[0x3c];
+		cS3DCamera* camera;
+};
+static_assert(offsetof(SC4DrawContext, camera) == 0x3c);
 
 class cSC4VisualEffect
 {
@@ -39,7 +63,6 @@ class cSC4VisualEffect
 				void* component;
 				uint8_t RESERVED[0x8];
 		};
-		static_assert(offsetof(cComponentRec, component) == 0x38);
 		static_assert(sizeof(cComponentRec) == 0x44);
 
 		uint8_t RESERVED[0x114];
@@ -47,16 +70,14 @@ class cSC4VisualEffect
 		cComponentRec* componentsEnd;
 };
 static_assert(offsetof(cSC4VisualEffect, componentsBegin) == 0x114);
-static_assert(offsetof(cSC4VisualEffect, componentsEnd) == 0x118);
 
 class cSC4EffectsParticle
 {
 	public:
 		uint8_t RESERVED[0x34];
-		float alphaFactor;  // multiplied with the alpha curve when rendering
-		float colorFactor[3];  // multiplied with the color curve when rendering
+		float alphaFactor;
+		float colorFactor[3];
 };
-static_assert(offsetof(cSC4EffectsParticle, alphaFactor) == 0x34);
 static_assert(offsetof(cSC4EffectsParticle, colorFactor) == 0x38);
 
 class cSC4ParticleListNode
@@ -68,21 +89,6 @@ class cSC4ParticleListNode
 };
 static_assert(offsetof(cSC4ParticleListNode, particle) == 0x8);
 
-class SC4DrawContext
-{
-	public:
-		uint8_t RESERVED[0x3c];
-		cS3DCamera* camera;
-};
-static_assert(offsetof(SC4DrawContext, camera) == 0x3c);
-
-// cS3DCamera keeps its transform at +0x28, so the camera position is the translation at +0x50 (see
-// cS3DCamera::GetPosition). The gzcom-dll field vPos at +0x160 is the look-at target (see cS3DCamera::GetLookAt).
-inline cS3DVector3 GetCameraPosition(cS3DCamera* camera)
-{
-	return *reinterpret_cast<cS3DVector3*>(reinterpret_cast<uint8_t*>(camera) + 0x50);
-}
-
 class cSC4ModelBasedParticlesEffect
 {
 	public:
@@ -93,11 +99,9 @@ class cSC4ModelBasedParticlesEffect
 
 		void* vtable;
 		uint8_t RESERVED[0x10];
-		cSC4ParticleListNode* particles;  // sentinel node of a circular list
-		uint8_t RESERVED[0xac];
-		// world transform the particles are rendered with (second argument of SetTransforms), a cS3DTransform
-		uint8_t transformChangeCount;
-		uint8_t transformFlags;  // 0 means identity, in which case the translation is ignored
+		cSC4ParticleListNode* particles;  // sentinel of a circular list
+		uint8_t RESERVED[0xad];
+		uint8_t transformFlags;  // world transform at +0xc4; 0 if identity, in which case the translation is unused
 		uint8_t RESERVED[0x26];
 		float transformTranslation[3];
 		uint8_t RESERVED[0x128];
@@ -121,4 +125,3 @@ class cSC4ViewInputControlNetworkIntxTool
 };
 static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, previewEffect) == 0x40);
 static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, previewNameBegin) == 0x78);
-static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, previewNameEnd) == 0x7c);

@@ -20,6 +20,8 @@ public:
 	bool enableDualNetworkTransitPatch;
 	bool enableTransportMenuPatch;
 	bool enableGhostPreviewPatch;
+	int ghostPreviewColor[3];
+	float ghostPreviewAlphaScale;
 	float ghostPreviewDepthTolerance;
 	bool enableKeyboardShortcuts;
 };
