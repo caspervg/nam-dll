@@ -79,3 +79,16 @@ void Patching::InstallCallHook(uint32_t address, void (*pfnFunc)(void)) {
 	*((uint8_t*)address) = 0xE8;
 	*((uint32_t*)(address + 1)) = ((uint32_t)pfnFunc) - address - 5;
 }
+
+uint32_t Patching::PatchVTableSlot(const uint32_t slotAddress, const uint32_t expectedValue, void* const newValue)
+{
+	auto* const slot = reinterpret_cast<uint32_t*>(slotAddress);
+	const uint32_t previous = *slot;
+	THROW_HR_IF(E_FAIL, previous != expectedValue);
+
+	DWORD oldProtect;
+	THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(slot, sizeof(uint32_t), PAGE_READWRITE, &oldProtect));
+	*slot = reinterpret_cast<uint32_t>(newValue);
+	VirtualProtect(slot, sizeof(uint32_t), oldProtect, &oldProtect);
+	return previous;
+}
