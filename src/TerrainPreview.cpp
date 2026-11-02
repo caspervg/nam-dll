@@ -63,7 +63,15 @@ namespace
 	// The changed cells are outlined with the tile outline texture of the local_tile_outline effect, which is white so it can be tinted.
 	// Cells that are cut get the cut color, cells that are filled the fill color, and the opacity grows with the height change.
 	const cGZPersistResourceKey outlineTexture(0x7ab50e44, 0x1abe787d, 0x144161da);
-	constexpr int32_t outlineCombinerOp = 3;  // as used by the zoning tools
+
+	// Textured selections share one combiner, of which only the RGB mode is set per selection. Its second RGB source is the
+	// vertex color, so the color of a selection is never used. While the outlines are shown, the constant color is used instead,
+	// which with the modulate mode gives the outline texture times the color of the selection.
+	uint8_t* const texturedSelectionRGBSource1 = reinterpret_cast<uint8_t*>(0xb0d6f2);  // cGDCombiner at 0xb0d6f0
+	constexpr uint8_t sourcePrimaryColor = 3;
+	constexpr uint8_t sourceConstant = 2;
+	constexpr int32_t combineModeModulate = 1;  // also halves the selection alpha
+	bool combinerSourceReplaced = false;
 	constexpr uint8_t cutColor[3] = {255, 140, 90};
 	constexpr uint8_t fillColor[3] = {120, 200, 255};
 	constexpr float fullOpacityHeightChange = 8.0f;
@@ -105,11 +113,15 @@ namespace
 			float change = (heightChange(x, z) + heightChange(x + 1, z) + heightChange(x, z + 1) + heightChange(x + 1, z + 1)) / 4;
 			const uint8_t* color = change < 0 ? cutColor : fillColor;
 			float opacity = outlineOpacity * (minOpacityFactor + (1 - minOpacityFactor) * (std::min)(std::abs(change) / fullOpacityHeightChange, 1.0f));
-			uint32_t rgba = color[0] << 24 | color[1] << 16 | color[2] << 8 | static_cast<uint8_t>(opacity * 255);
+			uint32_t rgba = color[0] << 24 | color[1] << 16 | color[2] << 8 | static_cast<uint8_t>((std::min)(opacity * 2, 1.0f) * 255);
 			SC4Point<int> cell = {x, z};
-			pView->MarkSelected(cell, outlineTexture, 0, false, rgba, outlineCombinerOp, false);
+			pView->MarkSelected(cell, outlineTexture, 0, false, rgba, combineModeModulate, false);
 		}
 		cellsOutlined = !cells.empty();
+		if (cellsOutlined && !combinerSourceReplaced && *texturedSelectionRGBSource1 == sourcePrimaryColor) {
+			*texturedSelectionRGBSource1 = sourceConstant;
+			combinerSourceReplaced = true;
+		}
 	}
 
 	void redraw(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
@@ -233,6 +245,10 @@ void TerrainPreview::Clear()
 			pView->ClearCurrentSelections();
 		}
 		cellsOutlined = false;
+		if (combinerSourceReplaced) {
+			*texturedSelectionRGBSource1 = sourcePrimaryColor;
+			combinerSourceReplaced = false;
+		}
 	}
 	// the terrain view copies the actual terrain again when it changes, so only restore what is still ours
 	if (appliedPoints != nullptr && appliedPoints == *spPoints) {

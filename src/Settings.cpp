@@ -23,7 +23,7 @@ Settings::Settings() :
 	ghostPreviewColor{140, 204, 255},
 	ghostPreviewAlphaScale(0.75f),
 	ghostPreviewDepthTolerance(1.0f),
-	ghostPreviewGradingOpacity(0.8f),
+	ghostPreviewGradingOpacity(0.4f),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
