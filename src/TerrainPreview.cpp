@@ -5,6 +5,7 @@
 #include "cISC4City.h"
 #include "cISTETerrain.h"
 #include "cISTETerrainView.h"
+#include "cGZPersistResourceKey.h"
 #include "GZServPtrs.h"
 #include "wil/result_macros.h"
 #include <algorithm>
@@ -57,54 +58,17 @@ namespace
 	std::unordered_map<uint32_t, float> appliedHeightChanges;
 	cSTETerrainViewPoint* appliedPoints = nullptr;
 	uint32_t appliedVertexCountX = 0;
-	bool cellsHighlighted = false;
+	bool cellsOutlined = false;
 
-	// The highlight colors of cSTESelectedTerrainArea are fixed, so the blue one is changed while the grading is shown.
-	// The colors are only copied into their table on the first draw of a selection, which sets the guard bit.
-	constexpr auto highlightColor = cISTETerrain::eHilightColorType::Blue;
-	float* const highlightColorTable = reinterpret_cast<float*>(0xb4bdc0);  // RGB per color type
-	const uint32_t* const highlightColorTableGuard = reinterpret_cast<uint32_t*>(0xb4bdfc);
-	float* const highlightAlphaTable = reinterpret_cast<float*>(0xab42e4);  // read-only data
-
-	float previewColor[3];
-	float previewAlpha;
-	float originalColor[3];
-	float originalAlpha;
-	bool colorReplaced = false;
-	bool alphaReplaced = false;
-
-	void writeFloat(float* address, float value)
-	{
-		Patching::OverwriteMemory(address, *reinterpret_cast<uint32_t*>(&value));
-	}
-
-	void replaceHighlightColor()
-	{
-		float* color = highlightColorTable + 3 * static_cast<int>(highlightColor);
-		float* alpha = highlightAlphaTable + static_cast<int>(highlightColor);
-		if (!colorReplaced && (*highlightColorTableGuard & 1) != 0) {
-			std::copy(color, color + 3, originalColor);
-			std::copy(std::begin(previewColor), std::end(previewColor), color);
-			colorReplaced = true;
-		}
-		if (!alphaReplaced) {
-			originalAlpha = *alpha;
-			writeFloat(alpha, previewAlpha);
-			alphaReplaced = true;
-		}
-	}
-
-	void restoreHighlightColor()
-	{
-		if (colorReplaced) {
-			std::copy(std::begin(originalColor), std::end(originalColor), highlightColorTable + 3 * static_cast<int>(highlightColor));
-			colorReplaced = false;
-		}
-		if (alphaReplaced) {
-			writeFloat(highlightAlphaTable + static_cast<int>(highlightColor), originalAlpha);
-			alphaReplaced = false;
-		}
-	}
+	// The changed cells are outlined with the tile outline texture of the local_tile_outline effect, which is white so it can be tinted.
+	// Cells that are cut get the cut color, cells that are filled the fill color, and the opacity grows with the height change.
+	const cGZPersistResourceKey outlineTexture(0x7ab50e44, 0x1abe787d, 0x144161da);
+	constexpr int32_t outlineCombinerOp = 3;  // as used by the zoning tools
+	constexpr uint8_t cutColor[3] = {255, 140, 90};
+	constexpr uint8_t fillColor[3] = {120, 200, 255};
+	constexpr float fullOpacityHeightChange = 8.0f;
+	constexpr float minOpacityFactor = 0.3f;
+	float outlineOpacity;
 
 	cISTETerrainView* getTerrainView()
 	{
@@ -114,8 +78,8 @@ namespace
 		return pTerrain ? pTerrain->GetView() : nullptr;
 	}
 
-	// highlights the cells around the changed vertices like the zoning tools do, to show that this terrain is only a preview
-	void highlightCells(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
+	// outlines the cells around the changed vertices, to show that this terrain is only a preview
+	void outlineCells(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
 	{
 		cISTETerrainView* pView = getTerrainView();
 		if (pView == nullptr || vertexCountX < 2) {
@@ -133,14 +97,19 @@ namespace
 				}
 			}
 		}
+		auto heightChange = [vertexCountX](int x, int z) {
+			auto search = appliedHeightChanges.find(z * vertexCountX + x);
+			return search != appliedHeightChanges.end() ? search->second : 0.0f;
+		};
 		for (auto& [x, z] : cells) {
+			float change = (heightChange(x, z) + heightChange(x + 1, z) + heightChange(x, z + 1) + heightChange(x + 1, z + 1)) / 4;
+			const uint8_t* color = change < 0 ? cutColor : fillColor;
+			float opacity = outlineOpacity * (minOpacityFactor + (1 - minOpacityFactor) * (std::min)(std::abs(change) / fullOpacityHeightChange, 1.0f));
+			uint32_t rgba = color[0] << 24 | color[1] << 16 | color[2] << 8 | static_cast<uint8_t>(opacity * 255);
 			SC4Point<int> cell = {x, z};
-			pView->MarkSelected(cell, highlightColor, false);
+			pView->MarkSelected(cell, outlineTexture, 0, false, rgba, outlineCombinerOp, false);
 		}
-		cellsHighlighted = !cells.empty();
-		if (cellsHighlighted) {
-			replaceHighlightColor();
-		}
+		cellsOutlined = !cells.empty();
 	}
 
 	void redraw(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
@@ -224,7 +193,7 @@ namespace
 		applied = changes;
 		appliedPoints = points;
 		appliedVertexCountX = *spVertexCountX;
-		highlightCells(applied, appliedVertexCountX);
+		outlineCells(applied, appliedVertexCountX);
 		redraw(applied, appliedVertexCountX);
 	}
 
@@ -259,12 +228,11 @@ void TerrainPreview::EndMouseMove()
 
 void TerrainPreview::Clear()
 {
-	if (cellsHighlighted) {
+	if (cellsOutlined) {
 		if (cISTETerrainView* pView = getTerrainView()) {
 			pView->ClearCurrentSelections();
 		}
-		cellsHighlighted = false;
-		restoreHighlightColor();
+		cellsOutlined = false;
 	}
 	// the terrain view copies the actual terrain again when it changes, so only restore what is still ours
 	if (appliedPoints != nullptr && appliedPoints == *spPoints) {
@@ -300,10 +268,9 @@ float TerrainPreview::GetHeightChange(float x, float z)
 	return north * (1 - tz) + south * tz;
 }
 
-void TerrainPreview::Install(const float (&highlightColor)[3], float highlightOpacity)
+void TerrainPreview::Install(float opacity)
 {
-	std::copy(std::begin(highlightColor), std::end(highlightColor), previewColor);
-	previewAlpha = std::clamp(highlightOpacity, 0.0f, 1.0f);
+	outlineOpacity = std::clamp(opacity, 0.0f, 1.0f);
 
 	auto callSite = reinterpret_cast<uint8_t*>(InsertIsolatedHighwayIntersection_CallSite);
 	uint32_t target = InsertIsolatedHighwayIntersection_CallSite + 5 + *reinterpret_cast<int32_t*>(callSite + 1);

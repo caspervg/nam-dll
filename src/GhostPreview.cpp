@@ -295,7 +295,7 @@ void GhostPreview::Install(const Settings& settings)
 		THROW_HR_IF(E_FAIL, *reinterpret_cast<uint32_t*>(vtableHook.slotAddress) != vtableHook.expected);
 	}
 	if (gradingEnabled) {
-		TerrainPreview::Install(ghostColor, settings.ghostPreviewGradingOpacity);
+		TerrainPreview::Install(settings.ghostPreviewGradingOpacity);
 	}
 	for (auto& vtableHook : vtableHooks) {
 		*vtableHook.original = reinterpret_cast<void*>(Patching::PatchVTableSlot(vtableHook.slotAddress, vtableHook.expected, vtableHook.hook));
