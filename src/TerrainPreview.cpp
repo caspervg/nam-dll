@@ -1,9 +1,15 @@
 #include "TerrainPreview.h"
 #include "NetworkStubs.h"
 #include "Patching.h"
+#include "cISC4App.h"
+#include "cISC4City.h"
+#include "cISTETerrain.h"
+#include "cISTETerrainView.h"
+#include "GZServPtrs.h"
 #include "wil/result_macros.h"
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -48,6 +54,41 @@ namespace
 	std::unordered_map<uint32_t, float> appliedHeightChanges;
 	cSTETerrainViewPoint* appliedPoints = nullptr;
 	uint32_t appliedVertexCountX = 0;
+	bool cellsHighlighted = false;
+
+	cISTETerrainView* getTerrainView()
+	{
+		cISC4AppPtr pApp;
+		cISC4City* pCity = pApp ? pApp->GetCity() : nullptr;
+		cISTETerrain* pTerrain = pCity ? pCity->GetTerrain() : nullptr;
+		return pTerrain ? pTerrain->GetView() : nullptr;
+	}
+
+	// highlights the cells around the changed vertices like the zoning tools do, to show that this terrain is only a preview
+	void highlightCells(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
+	{
+		cISTETerrainView* pView = getTerrainView();
+		if (pView == nullptr || vertexCountX < 2) {
+			return;
+		}
+		std::set<std::pair<int, int>> cells;
+		for (auto& change : changes) {
+			int x = change.index % vertexCountX;
+			int z = change.index / vertexCountX;
+			for (int dz = -1; dz <= 0; dz++) {
+				for (int dx = -1; dx <= 0; dx++) {
+					if (x + dx >= 0 && x + dx < static_cast<int>(vertexCountX) - 1 && z + dz >= 0) {
+						cells.insert({x + dx, z + dz});
+					}
+				}
+			}
+		}
+		for (auto& [x, z] : cells) {
+			SC4Point<int> cell = {x, z};
+			pView->MarkSelected(cell, cISTETerrain::eHilightColorType::Blue, false);
+		}
+		cellsHighlighted = !cells.empty();
+	}
 
 	void redraw(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
 	{
@@ -130,6 +171,7 @@ namespace
 		applied = changes;
 		appliedPoints = points;
 		appliedVertexCountX = *spVertexCountX;
+		highlightCells(applied, appliedVertexCountX);
 		redraw(applied, appliedVertexCountX);
 	}
 
@@ -164,6 +206,12 @@ void TerrainPreview::EndMouseMove()
 
 void TerrainPreview::Clear()
 {
+	if (cellsHighlighted) {
+		if (cISTETerrainView* pView = getTerrainView()) {
+			pView->ClearCurrentSelections();
+		}
+		cellsHighlighted = false;
+	}
 	// the terrain view copies the actual terrain again when it changes, so only restore what is still ours
 	if (appliedPoints != nullptr && appliedPoints == *spPoints) {
 		for (auto& change : applied) {
