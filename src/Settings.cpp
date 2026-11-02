@@ -18,6 +18,8 @@ Settings::Settings() :
 	enableDualNetworkTransitPatch(false),
 	enableTransportMenuPatch(true),
 	enableGhostPreviewPatch(true),
+	ghostPreviewOverlay(true),
+	ghostPreviewGrading(false),
 	ghostPreviewColor{140, 204, 255},
 	ghostPreviewAlphaScale(0.75f),
 	ghostPreviewDepthTolerance(1.0f),
@@ -61,6 +63,10 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableDualNetworkTransitPatch", enableDualNetworkTransitPatch);
 			readBoolProp("EnableTransportMenuPatch", enableTransportMenuPatch);
 			readBoolProp("EnableGhostPreviewPatch", enableGhostPreviewPatch);
+			if (const std::string& mode = ini.get("NAM").get("GhostPreviewMode"); !mode.empty()) {
+				ghostPreviewOverlay = mode == "overlay" || mode == "both";
+				ghostPreviewGrading = mode == "grading" || mode == "both";
+			}
 			readColorProp("GhostPreviewColor", ghostPreviewColor);
 			readFloatProp("GhostPreviewAlphaScale", ghostPreviewAlphaScale);
 			readFloatProp("GhostPreviewDepthTolerance", ghostPreviewDepthTolerance);

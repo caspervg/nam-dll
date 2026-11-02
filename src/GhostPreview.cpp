@@ -1,5 +1,6 @@
 #include "GhostPreview.h"
 #include "Patching.h"
+#include "TerrainPreview.h"
 #include "EffectStubs.h"
 #include "cISC4EffectsManager.h"
 #include "wil/result_macros.h"
@@ -10,12 +11,15 @@
 // Whenever the intersection tool has a preview effect, we create a second instance of the same effect (the ghost).
 // Its model is drawn with depth test GREATER, so it only shows where the preview is hidden by terrain or buildings.
 // The preview models write depth, so the ghost has to be drawn right before the preview each frame.
+// With grading, the terrain is drawn as it will be after placement, and the preview is moved onto it.
 namespace
 {
 	cISC4EffectsManager** const sppEffectsManager = reinterpret_cast<cISC4EffectsManager**>(0xb43d1c);
 
 	constexpr uint32_t particleAlphaScaleParam = 3;  // SetFloatParams
 
+	bool overlayEnabled;
+	bool gradingEnabled;
 	float ghostColor[3];
 	float ghostAlphaScale;
 	float depthTolerance;
@@ -56,8 +60,6 @@ namespace
 
 	void createGhost(cSC4ViewInputControlNetworkIntxTool* tool)
 	{
-		ghostTool = tool;
-		ghostSource = tool->previewEffect;
 		if (*sppEffectsManager == nullptr || tool->previewNameEnd <= tool->previewNameBegin) {
 			return;
 		}
@@ -73,9 +75,19 @@ namespace
 	{
 		if (tool != ghostTool || tool->previewEffect != ghostSource) {
 			destroyGhost();
-			if (tool->previewEffect != nullptr) {
+			ghostTool = tool;
+			ghostSource = tool->previewEffect;
+			if (overlayEnabled && ghostSource != nullptr) {
 				createGhost(tool);
 			}
+		}
+		if (ghostSource == nullptr) {
+			TerrainPreview::Clear();
+			return;
+		}
+		// the particle models only exist once the effects have been started
+		if (sourceModels.empty()) {
+			sourceModels = getModelParticles(ghostSource);
 		}
 		if (ghost == nullptr) {
 			return;
@@ -85,7 +97,6 @@ namespace
 		ghostSource->GetEffectTransform(transform);
 		ghost->SetEffectTransform(transform);
 
-		// the particle models only exist once the effects have been started
 		if (ghostModels.empty()) {
 			ghostModels = getModelParticles(ghost);
 			for (auto particles : ghostModels) {
@@ -93,9 +104,6 @@ namespace
 				attributes.flags |= SC4DrawAttributes::kDepthGreaterNoWrite;  // kept by the particle renderer
 				particles->modelInstance->SetDrawAttributes(attributes);
 			}
-		}
-		if (sourceModels.empty()) {
-			sourceModels = getModelParticles(ghostSource);
 		}
 	}
 
@@ -159,6 +167,10 @@ namespace
 		}
 
 		cS3DVector3 shift = getToleranceShift(drawContext);
+		if (gradingEnabled && pThis->transformFlags != 0) {
+			// the preview is pinned to the actual terrain, so it is moved onto the previewed terrain at its position
+			shift.fY += TerrainPreview::GetHeightChange(pThis->transformTranslation[0], pThis->transformTranslation[2]);
+		}
 		for (auto particles : ghostModels) {
 			// the particles are re-emitted all the time, so their color is set every frame
 			for (auto node = particles->particles->next; node != particles->particles; node = node->next) {
@@ -200,6 +212,7 @@ namespace
 
 	bool __fastcall Hook_OnMouseDownL(cSC4ViewInputControlNetworkIntxTool* pThis, void*, int32_t x, int32_t z, uint32_t modifiers)
 	{
+		TerrainPreview::Clear();  // placing the piece changes the actual terrain, which must not be restored afterwards
 		bool result = OnMouseDownL(pThis, x, z, modifiers);
 		updateGhost(pThis);
 		return result;
@@ -214,7 +227,9 @@ namespace
 
 	bool __fastcall Hook_OnMouseMove(cSC4ViewInputControlNetworkIntxTool* pThis, void*, int32_t x, int32_t z, uint32_t modifiers)
 	{
+		TerrainPreview::BeginMouseMove();
 		bool result = OnMouseMove(pThis, x, z, modifiers);
+		TerrainPreview::EndMouseMove();
 		updateGhost(pThis);
 		return result;
 	}
@@ -230,6 +245,7 @@ namespace
 	{
 		if (pThis == ghostTool) {
 			destroyGhost();
+			TerrainPreview::Clear();
 		}
 		return DeletingDtor(pThis, flags);
 	}
@@ -269,12 +285,17 @@ void GhostPreview::Install(const Settings& settings)
 	for (int i = 0; i < 3; i++) {
 		ghostColor[i] = settings.ghostPreviewColor[i] / 255.0f;
 	}
+	overlayEnabled = settings.ghostPreviewOverlay;
+	gradingEnabled = settings.ghostPreviewGrading;
 	ghostAlphaScale = settings.ghostPreviewAlphaScale;
 	depthTolerance = settings.ghostPreviewDepthTolerance;
 
 	// check all slots first, so that nothing is patched if any of them is unexpected
 	for (auto& vtableHook : vtableHooks) {
 		THROW_HR_IF(E_FAIL, *reinterpret_cast<uint32_t*>(vtableHook.slotAddress) != vtableHook.expected);
+	}
+	if (gradingEnabled) {
+		TerrainPreview::Install();
 	}
 	for (auto& vtableHook : vtableHooks) {
 		*vtableHook.original = reinterpret_cast<void*>(Patching::PatchVTableSlot(vtableHook.slotAddress, vtableHook.expected, vtableHook.hook));
