@@ -14,8 +14,8 @@
 // tool currently holds into a second "ghost" instance of the same effect.
 //
 // The model of the ghost is drawn with SC4DrawAttributes::kDepthGreaterNoWrite, so it only shows where the
-// actual preview is hidden behind terrain or buildings. The preview models do not write depth themselves,
-// so the two instances never overlap.
+// actual preview is hidden behind terrain or buildings. As the preview models write depth themselves (draw mode
+// depthDecal), the ghost is always rendered right before the preview, so it is only tested against the scene.
 namespace
 {
 	cISC4EffectsManager** const sppEffectsManager = reinterpret_cast<cISC4EffectsManager**>(0xb43d1c);
@@ -62,7 +62,8 @@ namespace
 		cISC4VisualEffect* source = nullptr;
 		cISC4VisualEffect* ghost = nullptr;
 		bool modelsFlagged = false;
-		std::vector<cSC4ModelBasedParticlesEffect*> components;
+		std::vector<cSC4ModelBasedParticlesEffect*> ghostComponents;
+		std::vector<cSC4ModelBasedParticlesEffect*> sourceComponents;
 	};
 	GhostState sGhost;
 
@@ -75,28 +76,35 @@ namespace
 		sGhost = GhostState{};
 	}
 
-	// Components and their models are created lazily after Start, so this is retried until something was flagged.
-	bool flagGhostModels(cISC4VisualEffect* ghost)
+	// Components and their models are created lazily after Start, so callers retry until something was found.
+	std::vector<cSC4ModelBasedParticlesEffect*> getModelComponents(cISC4VisualEffect* effect)
 	{
-		auto visualEffect = reinterpret_cast<cSC4VisualEffect*>(ghost);
-		bool flagged = false;
+		std::vector<cSC4ModelBasedParticlesEffect*> components;
+		auto visualEffect = reinterpret_cast<cSC4VisualEffect*>(effect);
 		for (auto rec = visualEffect->componentsBegin; rec != nullptr && rec < visualEffect->componentsEnd; rec++) {
 			auto component = reinterpret_cast<cSC4ModelBasedParticlesEffect*>(rec->component);
-			if (component == nullptr || reinterpret_cast<uint32_t>(component->vtable) != cSC4ModelBasedParticlesEffect::kVTable) {
-				continue;  // only model particles carry a model instance
-			}
-			cIS3DModelInstance* modelInstance = component->modelInstance;
-			if (modelInstance != nullptr) {
-				auto getDrawAttributes = reinterpret_cast<pfn_GetDrawAttributes>((*reinterpret_cast<void***>(modelInstance))[kModelInstanceGetDrawAttributesSlot]);
-				SC4DrawAttributes current = {};
-				SC4DrawAttributes attributes = *getDrawAttributes(modelInstance, &current);
-				attributes.flags |= SC4DrawAttributes::kDepthGreaterNoWrite;  // the particle renderer keeps this flag on every frame
-				modelInstance->SetDrawAttributes(attributes);
-				sGhost.components.push_back(component);
-				flagged = true;
+			if (component != nullptr &&
+				reinterpret_cast<uint32_t>(component->vtable) == cSC4ModelBasedParticlesEffect::kVTable &&
+				component->modelInstance != nullptr)
+			{
+				components.push_back(component);
 			}
 		}
-		return flagged;
+		return components;
+	}
+
+	bool flagGhostModels()
+	{
+		sGhost.ghostComponents = getModelComponents(sGhost.ghost);
+		for (auto component : sGhost.ghostComponents) {
+			cIS3DModelInstance* modelInstance = component->modelInstance;
+			auto getDrawAttributes = reinterpret_cast<pfn_GetDrawAttributes>((*reinterpret_cast<void***>(modelInstance))[kModelInstanceGetDrawAttributesSlot]);
+			SC4DrawAttributes current = {};
+			SC4DrawAttributes attributes = *getDrawAttributes(modelInstance, &current);
+			attributes.flags |= SC4DrawAttributes::kDepthGreaterNoWrite;  // the particle renderer keeps this flag on every frame
+			modelInstance->SetDrawAttributes(attributes);
+		}
+		return !sGhost.ghostComponents.empty();
 	}
 
 	void createGhost(cSC4ViewInputControlNetworkIntxTool* tool, cISC4VisualEffect* source)
@@ -138,7 +146,10 @@ namespace
 			sGhost.ghost->SetEffectTransform(*reinterpret_cast<cS3DTransform*>(transform));
 
 			if (!sGhost.modelsFlagged) {
-				sGhost.modelsFlagged = flagGhostModels(sGhost.ghost);
+				sGhost.modelsFlagged = flagGhostModels();
+			}
+			if (sGhost.sourceComponents.empty()) {
+				sGhost.sourceComponents = getModelComponents(source);
 			}
 		}
 	}
@@ -185,13 +196,25 @@ namespace
 		return result;
 	}
 
-	// Shared by all model-based particle effects, so only the components of the ghost are tinted.
+	bool contains(const std::vector<cSC4ModelBasedParticlesEffect*>& components, cSC4ModelBasedParticlesEffect* component)
+	{
+		return std::find(components.begin(), components.end(), component) != components.end();
+	}
+
+	// Shared by all model-based particle effects, so only the components of the preview and its ghost are affected.
 	void __fastcall Hook_RenderActiveParticles(cSC4ModelBasedParticlesEffect* pThis, void* edxUnused, SC4DrawContext* drawContext)
 	{
-		if (std::find(sGhost.components.begin(), sGhost.components.end(), pThis) != sGhost.components.end()) {
-			// particles are re-emitted continuously, so their color factors are overwritten before every frame
-			for (auto node = pThis->particles->next; node != pThis->particles; node = node->next) {
-				std::copy(std::begin(ghostColor), std::end(ghostColor), node->particle->colorFactor);
+		if (contains(sGhost.ghostComponents, pThis)) {
+			return;  // rendered together with the preview below
+		}
+		if (contains(sGhost.sourceComponents, pThis)) {
+			// render the ghost first, before the preview writes its depth
+			for (auto ghostComponent : sGhost.ghostComponents) {
+				// particles are re-emitted continuously, so their color factors are overwritten before every frame
+				for (auto node = ghostComponent->particles->next; node != ghostComponent->particles; node = node->next) {
+					std::copy(std::begin(ghostColor), std::end(ghostColor), node->particle->colorFactor);
+				}
+				origRenderActiveParticles(ghostComponent, drawContext);
 			}
 		}
 		origRenderActiveParticles(pThis, drawContext);
