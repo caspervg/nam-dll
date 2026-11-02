@@ -23,7 +23,7 @@ Settings::Settings() :
 	ghostPreviewColor{140, 204, 255},
 	ghostPreviewAlphaScale(0.75f),
 	ghostPreviewDepthTolerance(1.0f),
-	ghostPreviewGradingOpacity(0.4f),
+	ghostPreviewGradingOpacity(0.15f),
 	ghostPreviewCutColor{255, 70, 50},
 	ghostPreviewFillColor{80, 220, 80},
 	enableKeyboardShortcuts(true) {};
