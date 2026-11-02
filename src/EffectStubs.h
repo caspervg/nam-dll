@@ -4,6 +4,8 @@
 #include "NetworkStubs.h"
 #include "cIS3DModelInstance.h"
 #include "cISC4VisualEffect.h"
+#include "cS3DCamera.h"
+#include "cS3DVector3.h"
 
 class SC4DrawAttributes
 {
@@ -69,13 +71,17 @@ static_assert(offsetof(cSC4ParticleListNode, particle) == 0x8);
 class SC4DrawContext
 {
 	public:
-		typedef void (__thiscall* pfn_SetDepthOffset)(SC4DrawContext* pThis, int32_t offset);
-		static inline pfn_SetDepthOffset SetDepthOffset = reinterpret_cast<pfn_SetDepthOffset>(0x7d4480);
-
-		uint8_t RESERVED[0xbc];
-		int32_t depthOffset;  // positive values move geometry towards the camera (e.g. 2 for decals)
+		uint8_t RESERVED[0x3c];
+		cS3DCamera* camera;
 };
-static_assert(offsetof(SC4DrawContext, depthOffset) == 0xbc);
+static_assert(offsetof(SC4DrawContext, camera) == 0x3c);
+
+// cS3DCamera keeps its transform at +0x28, so the camera position is the translation at +0x50 (see
+// cS3DCamera::GetPosition). The gzcom-dll field vPos at +0x160 is the look-at target (see cS3DCamera::GetLookAt).
+inline cS3DVector3 GetCameraPosition(cS3DCamera* camera)
+{
+	return *reinterpret_cast<cS3DVector3*>(reinterpret_cast<uint8_t*>(camera) + 0x50);
+}
 
 class cSC4ModelBasedParticlesEffect
 {
@@ -88,10 +94,18 @@ class cSC4ModelBasedParticlesEffect
 		void* vtable;
 		uint8_t RESERVED[0x10];
 		cSC4ParticleListNode* particles;  // sentinel node of a circular list
-		uint8_t RESERVED[0x208];
+		uint8_t RESERVED[0xac];
+		// world transform the particles are rendered with (second argument of SetTransforms), a cS3DTransform
+		uint8_t transformChangeCount;
+		uint8_t transformFlags;  // 0 means identity, in which case the translation is ignored
+		uint8_t RESERVED[0x26];
+		float transformTranslation[3];
+		uint8_t RESERVED[0x128];
 		cIS3DModelInstance* modelInstance;
 };
 static_assert(offsetof(cSC4ModelBasedParticlesEffect, particles) == 0x14);
+static_assert(offsetof(cSC4ModelBasedParticlesEffect, transformFlags) == 0xc5);
+static_assert(offsetof(cSC4ModelBasedParticlesEffect, transformTranslation) == 0xec);
 static_assert(offsetof(cSC4ModelBasedParticlesEffect, modelInstance) == 0x220);
 
 class cSC4ViewInputControlNetworkIntxTool

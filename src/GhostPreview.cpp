@@ -23,7 +23,7 @@ namespace
 	constexpr uint32_t particleParamAlphaScale = 3;  // cSC4ParticlesEffect::SetFloatParams
 	constexpr float ghostAlphaScale = 0.75f;
 	constexpr float ghostColor[3] = {0.55f, 0.8f, 1.0f};  // light blue tint
-	int32_t ghostDepthOffset = 0;
+	float ghostDepthTolerance = 0.0f;
 
 	constexpr size_t s3dTransformSize = 0x38;
 
@@ -210,19 +210,34 @@ namespace
 		}
 		if (contains(sGhost.sourceComponents, pThis)) {
 			// render the ghost first, before the preview writes its depth
-			const int32_t previousDepthOffset = drawContext->depthOffset;
-			if (ghostDepthOffset != 0) {
-				SC4DrawContext::SetDepthOffset(drawContext, previousDepthOffset + ghostDepthOffset);
+			cS3DVector3 shift(0.0f);  // towards the camera; with an orthographic camera, this only changes the depth
+			if (ghostDepthTolerance != 0.0f && drawContext->camera != nullptr) {
+				const cS3DVector3 position = GetCameraPosition(drawContext->camera);
+				const cS3DVector3& lookAt = drawContext->camera->vPos;
+				shift = cS3DVector3(position.fX - lookAt.fX, position.fY - lookAt.fY, position.fZ - lookAt.fZ);
+				if (shift.Length() > 0.0f) {
+					shift.SetLength(ghostDepthTolerance);
+				}
 			}
 			for (auto ghostComponent : sGhost.ghostComponents) {
 				// particles are re-emitted continuously, so their color factors are overwritten before every frame
 				for (auto node = ghostComponent->particles->next; node != ghostComponent->particles; node = node->next) {
 					std::copy(std::begin(ghostColor), std::end(ghostColor), node->particle->colorFactor);
 				}
+				// shift the render transform only, as particle positions get pinned to the terrain when emitted
+				float* translation = ghostComponent->transformTranslation;
+				const bool shifted = ghostComponent->transformFlags != 0;
+				if (shifted) {
+					translation[0] += shift.fX;
+					translation[1] += shift.fY;
+					translation[2] += shift.fZ;
+				}
 				origRenderActiveParticles(ghostComponent, drawContext);
-			}
-			if (ghostDepthOffset != 0) {
-				SC4DrawContext::SetDepthOffset(drawContext, previousDepthOffset);
+				if (shifted) {
+					translation[0] -= shift.fX;
+					translation[1] -= shift.fY;
+					translation[2] -= shift.fZ;
+				}
 			}
 		}
 		origRenderActiveParticles(pThis, drawContext);
@@ -244,9 +259,9 @@ namespace
 	}
 }
 
-void GhostPreview::Install(int32_t depthOffset)
+void GhostPreview::Install(float depthTolerance)
 {
-	ghostDepthOffset = depthOffset;
+	ghostDepthTolerance = depthTolerance;
 
 	// verify every slot before patching any, so that a mismatch leaves the vtable untouched
 	constexpr std::pair<uint32_t, uint32_t> expectedSlots[] = {

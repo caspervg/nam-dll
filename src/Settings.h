@@ -1,5 +1,4 @@
 #pragma once
-#include <cstdint>
 #include <filesystem>
 
 class Settings final
@@ -21,6 +20,6 @@ public:
 	bool enableDualNetworkTransitPatch;
 	bool enableTransportMenuPatch;
 	bool enableGhostPreviewPatch;
-	int32_t ghostPreviewDepthOffset;
+	float ghostPreviewDepthTolerance;
 	bool enableKeyboardShortcuts;
 };
