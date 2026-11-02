@@ -72,8 +72,8 @@ namespace
 	constexpr uint8_t sourceConstant = 2;
 	constexpr int32_t combineModeModulate = 1;  // also halves the selection alpha
 	bool combinerSourceReplaced = false;
-	constexpr uint8_t cutColor[3] = {255, 140, 90};
-	constexpr uint8_t fillColor[3] = {120, 200, 255};
+	uint8_t cutColor[3];
+	uint8_t fillColor[3];
 	constexpr float fullOpacityHeightChange = 8.0f;
 	constexpr float minOpacityFactor = 0.3f;
 	float outlineOpacity;
@@ -284,9 +284,11 @@ float TerrainPreview::GetHeightChange(float x, float z)
 	return north * (1 - tz) + south * tz;
 }
 
-void TerrainPreview::Install(float opacity)
+void TerrainPreview::Install(float opacity, const int (&cut)[3], const int (&fill)[3])
 {
 	outlineOpacity = std::clamp(opacity, 0.0f, 1.0f);
+	std::copy(std::begin(cut), std::end(cut), cutColor);
+	std::copy(std::begin(fill), std::end(fill), fillColor);
 
 	auto callSite = reinterpret_cast<uint8_t*>(InsertIsolatedHighwayIntersection_CallSite);
 	uint32_t target = InsertIsolatedHighwayIntersection_CallSite + 5 + *reinterpret_cast<int32_t*>(callSite + 1);
