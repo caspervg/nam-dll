@@ -61,7 +61,7 @@ namespace
 	bool cellsOutlined = false;
 
 	// The changed cells are outlined with the tile outline texture of the local_tile_outline effect, which is white so it can be tinted.
-	// Cells that are cut get the cut color, cells that are filled the fill color, and the opacity grows with the height change.
+	// Cells that are cut get the cut color, cells that are filled the fill color, and the opacity grows with the largest height change.
 	const cGZPersistResourceKey outlineTexture(0x7ab50e44, 0x1abe787d, 0x144161da);
 
 	// Textured selections share one combiner, of which only the RGB mode is set per selection. Its second RGB source is the
@@ -110,7 +110,13 @@ namespace
 			return search != appliedHeightChanges.end() ? search->second : 0.0f;
 		};
 		for (auto& [x, z] : cells) {
-			float change = (heightChange(x, z) + heightChange(x + 1, z) + heightChange(x, z + 1) + heightChange(x + 1, z + 1)) / 4;
+			// the corners of a cell can be raised and lowered at the same time, so the largest change decides
+			float change = 0.0f;
+			for (float cornerChange : {heightChange(x, z), heightChange(x + 1, z), heightChange(x, z + 1), heightChange(x + 1, z + 1)}) {
+				if (std::abs(cornerChange) > std::abs(change)) {
+					change = cornerChange;
+				}
+			}
 			const uint8_t* color = change < 0 ? cutColor : fillColor;
 			float opacity = outlineOpacity * (minOpacityFactor + (1 - minOpacityFactor) * (std::min)(std::abs(change) / fullOpacityHeightChange, 1.0f));
 			uint32_t rgba = color[0] << 24 | color[1] << 16 | color[2] << 8 | static_cast<uint8_t>((std::min)(opacity * 2, 1.0f) * 255);
