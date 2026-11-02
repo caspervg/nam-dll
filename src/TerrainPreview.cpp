@@ -10,6 +10,7 @@
 #include "wil/result_macros.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -60,9 +61,20 @@ namespace
 	uint32_t appliedVertexCountX = 0;
 	bool cellsOutlined = false;
 
-	// The changed cells are outlined with the tile outline texture of the local_tile_outline effect, which is white so it can be tinted.
-	// Cells that are cut get the cut color, cells that are filled the fill color, and the opacity grows with the largest height change.
-	const cGZPersistResourceKey outlineTexture(0x7ab50e44, 0x1abe787d, 0x144161da);
+	// The cut and filled regions each get a single outline in their color, which is more opaque where the terrain changes more.
+	// The outline textures (tools/grading_outlines.py) are white and draw the sides of a cell given by their instance ID.
+	constexpr uint32_t outlineTextureType = 0x7ab50e44;
+	constexpr uint32_t outlineTextureGroup = 0x4e414d47;
+	enum OutlineSide : uint32_t {
+		outlineXMin = 1 << 0,
+		outlineXMax = 1 << 1,
+		outlineZMin = 1 << 2,
+		outlineZMax = 1 << 3,
+		outlineCornerXMinZMin = 1 << 4,  // connects the outline at concave corners
+		outlineCornerXMinZMax = 1 << 5,
+		outlineCornerXMaxZMin = 1 << 6,
+		outlineCornerXMaxZMax = 1 << 7,
+	};
 
 	// Textured selections share one combiner, of which only the RGB mode is set per selection. Its second RGB source is the
 	// vertex color, so the color of a selection is never used. While the outlines are shown, the constant color is used instead,
@@ -109,21 +121,53 @@ namespace
 			auto search = appliedHeightChanges.find(z * vertexCountX + x);
 			return search != appliedHeightChanges.end() ? search->second : 0.0f;
 		};
+		// the corners of a cell can be raised and lowered at the same time, so the largest change decides
+		std::map<std::pair<int, int>, float> cellChanges;
 		for (auto& [x, z] : cells) {
-			// the corners of a cell can be raised and lowered at the same time, so the largest change decides
 			float change = 0.0f;
 			for (float cornerChange : {heightChange(x, z), heightChange(x + 1, z), heightChange(x, z + 1), heightChange(x + 1, z + 1)}) {
 				if (std::abs(cornerChange) > std::abs(change)) {
 					change = cornerChange;
 				}
 			}
-			const uint8_t* color = change < 0 ? cutColor : fillColor;
+			cellChanges[{x, z}] = change;
+		}
+		auto isCut = [](float change) { return change < 0; };
+		auto inRegion = [&cellChanges, &isCut](int x, int z, bool cut) {
+			auto search = cellChanges.find({x, z});
+			return search != cellChanges.end() && isCut(search->second) == cut;
+		};
+
+		for (auto& [cell, change] : cellChanges) {
+			auto [x, z] = cell;
+			bool cut = isCut(change);
+			bool xMin = !inRegion(x - 1, z, cut), xMax = !inRegion(x + 1, z, cut);
+			bool zMin = !inRegion(x, z - 1, cut), zMax = !inRegion(x, z + 1, cut);
+			uint32_t sides = (xMin ? outlineXMin : 0) | (xMax ? outlineXMax : 0) | (zMin ? outlineZMin : 0) | (zMax ? outlineZMax : 0);
+			if (!xMin && !zMin && !inRegion(x - 1, z - 1, cut)) {
+				sides |= outlineCornerXMinZMin;
+			}
+			if (!xMin && !zMax && !inRegion(x - 1, z + 1, cut)) {
+				sides |= outlineCornerXMinZMax;
+			}
+			if (!xMax && !zMin && !inRegion(x + 1, z - 1, cut)) {
+				sides |= outlineCornerXMaxZMin;
+			}
+			if (!xMax && !zMax && !inRegion(x + 1, z + 1, cut)) {
+				sides |= outlineCornerXMaxZMax;
+			}
+			if (sides == 0) {
+				continue;  // inside the region
+			}
+
+			const uint8_t* color = cut ? cutColor : fillColor;
 			float opacity = outlineOpacity * (minOpacityFactor + (1 - minOpacityFactor) * (std::min)(std::abs(change) / fullOpacityHeightChange, 1.0f));
 			uint32_t rgba = color[0] << 24 | color[1] << 16 | color[2] << 8 | static_cast<uint8_t>((std::min)(opacity * 2, 1.0f) * 255);
-			SC4Point<int> cell = {x, z};
-			pView->MarkSelected(cell, outlineTexture, 0, false, rgba, combineModeModulate, false);
+			SC4Point<int> point = {x, z};
+			cGZPersistResourceKey texture(outlineTextureType, outlineTextureGroup, sides);
+			pView->MarkSelected(point, texture, 0, false, rgba, combineModeModulate, false);
+			cellsOutlined = true;
 		}
-		cellsOutlined = !cells.empty();
 		if (cellsOutlined && !combinerSourceReplaced && *texturedSelectionRGBSource1 == sourcePrimaryColor) {
 			*texturedSelectionRGBSource1 = sourceConstant;
 			combinerSourceReplaced = true;
