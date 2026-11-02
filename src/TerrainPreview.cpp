@@ -2,6 +2,7 @@
 #include "NetworkStubs.h"
 #include "Patching.h"
 #include "wil/result_macros.h"
+#include <algorithm>
 #include <cmath>
 #include <unordered_map>
 #include <vector>
@@ -22,6 +23,12 @@ namespace
 	cSTETerrainViewPoint** const spPoints = reinterpret_cast<cSTETerrainViewPoint**>(0xb4c758);
 	const uint32_t* const spVertexCountX = reinterpret_cast<uint32_t*>(0xb4c74c);
 
+	// The view only redraws regions that changed, so the edited vertices have to be redrawn explicitly.
+	// RedisplayTerrain (0x749850) would also copy the actual terrain into the view again, so only its redraw message is posted.
+	constexpr uint32_t kMsgRedrawTerrainRegion = 0x870bc918;
+	typedef void (__cdecl* pfn_PostTerrainMessage)(uint32_t messageType, uint32_t data1, uint32_t data2, uint32_t data3, uint32_t data4);
+	pfn_PostTerrainMessage PostTerrainMessage = reinterpret_cast<pfn_PostTerrainMessage>(0x743380);
+
 	constexpr uint32_t InsertIsolatedHighwayIntersection_CallSite = 0x66166f;  // in cSC4ViewInputControlNetworkIntxTool::OnMouseMove
 	constexpr uint32_t kInsertIsolatedHighwayIntersection = 0x62cd50;
 	constexpr float cellSize = 16.0f;
@@ -41,6 +48,37 @@ namespace
 	std::unordered_map<uint32_t, float> appliedHeightChanges;
 	cSTETerrainViewPoint* appliedPoints = nullptr;
 	uint32_t appliedVertexCountX = 0;
+
+	void redraw(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
+	{
+		if (changes.empty() || vertexCountX == 0) {
+			return;
+		}
+		uint32_t minX = UINT32_MAX, minZ = UINT32_MAX, maxX = 0, maxZ = 0;
+		float minY = changes[0].actualHeight, maxY = changes[0].actualHeight;
+		for (auto& change : changes) {
+			uint32_t x = change.index % vertexCountX;
+			uint32_t z = change.index / vertexCountX;
+			minX = (std::min)(minX, x);
+			maxX = (std::max)(maxX, x);
+			minZ = (std::min)(minZ, z);
+			maxZ = (std::max)(maxZ, z);
+			minY = (std::min)({minY, change.actualHeight, change.previewHeight});
+			maxY = (std::max)({maxY, change.actualHeight, change.previewHeight});
+		}
+		// one cell of margin, as the triangles around the edited vertices change as well
+		minX = minX > 0 ? minX - 1 : 0;
+		minZ = minZ > 0 ? minZ - 1 : 0;
+		maxX = (std::min)(maxX + 1, vertexCountX - 1);
+		maxZ += 1;
+		auto heightToData = [](float y) { return static_cast<uint32_t>(std::clamp(y, 0.0f, 65535.0f)); };
+		PostTerrainMessage(
+			kMsgRedrawTerrainRegion,
+			minX << 16 | maxX,
+			minZ << 16 | maxZ,
+			heightToData(std::floor(minY) - 1) << 16 | heightToData(std::ceil(maxY) + 1),
+			0);
+	}
 
 	float getActualHeight(cSTETerrainViewPoint* points, uint32_t index)
 	{
@@ -92,6 +130,7 @@ namespace
 		applied = changes;
 		appliedPoints = points;
 		appliedVertexCountX = *spVertexCountX;
+		redraw(applied, appliedVertexCountX);
 	}
 
 	typedef bool (__thiscall* pfn_InsertIsolatedHighwayIntersection)(cSC4NetworkTool* pThis, int32_t x, int32_t z, uint32_t ruleId, uint32_t commit);
@@ -132,6 +171,7 @@ void TerrainPreview::Clear()
 				appliedPoints[change.index].y = change.actualHeight;
 			}
 		}
+		redraw(applied, appliedVertexCountX);
 	}
 	applied.clear();
 	appliedHeightChanges.clear();
