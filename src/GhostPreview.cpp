@@ -3,8 +3,10 @@
 #include "EffectStubs.h"
 #include "cISC4EffectsManager.h"
 #include "wil/result_macros.h"
+#include <algorithm>
 #include <string>
 #include <utility>
+#include <vector>
 
 // The intersection tool (puzzle pieces) keeps its preview effect in a member and re-creates it whenever the
 // effect name changes, e.g. for the "_red" variant of invalid placements. Instead of hooking into its
@@ -19,7 +21,8 @@ namespace
 	cISC4EffectsManager** const sppEffectsManager = reinterpret_cast<cISC4EffectsManager**>(0xb43d1c);
 
 	constexpr uint32_t particleParamAlphaScale = 3;  // cSC4ParticlesEffect::SetFloatParams
-	constexpr float ghostAlphaScale = 0.35f;
+	constexpr float ghostAlphaScale = 0.75f;
+	constexpr float ghostColor[3] = {0.55f, 0.8f, 1.0f};  // light blue tint
 
 	constexpr size_t s3dTransformSize = 0x38;
 
@@ -51,6 +54,7 @@ namespace
 	pfn_OnMouse origOnMouseMove = nullptr;
 	pfn_OnNoArgs origOnMouseExit = nullptr;
 	pfn_DeletingDtor origDeletingDtor = nullptr;
+	cSC4ModelBasedParticlesEffect::pfn_RenderActiveParticles origRenderActiveParticles = nullptr;
 
 	struct GhostState
 	{
@@ -58,6 +62,7 @@ namespace
 		cISC4VisualEffect* source = nullptr;
 		cISC4VisualEffect* ghost = nullptr;
 		bool modelsFlagged = false;
+		std::vector<cSC4ModelBasedParticlesEffect*> components;
 	};
 	GhostState sGhost;
 
@@ -87,6 +92,7 @@ namespace
 				SC4DrawAttributes attributes = *getDrawAttributes(modelInstance, &current);
 				attributes.flags |= SC4DrawAttributes::kDepthGreaterNoWrite;  // the particle renderer keeps this flag on every frame
 				modelInstance->SetDrawAttributes(attributes);
+				sGhost.components.push_back(component);
 				flagged = true;
 			}
 		}
@@ -179,6 +185,18 @@ namespace
 		return result;
 	}
 
+	// Shared by all model-based particle effects, so only the components of the ghost are tinted.
+	void __fastcall Hook_RenderActiveParticles(cSC4ModelBasedParticlesEffect* pThis, void* edxUnused, SC4DrawContext* drawContext)
+	{
+		if (std::find(sGhost.components.begin(), sGhost.components.end(), pThis) != sGhost.components.end()) {
+			// particles are re-emitted continuously, so their color factors are overwritten before every frame
+			for (auto node = pThis->particles->next; node != pThis->particles; node = node->next) {
+				std::copy(std::begin(ghostColor), std::end(ghostColor), node->particle->colorFactor);
+			}
+		}
+		origRenderActiveParticles(pThis, drawContext);
+	}
+
 	void* __fastcall Hook_DeletingDtor(cSC4ViewInputControlNetworkIntxTool* pThis, void* edxUnused, uint32_t flags)
 	{
 		if (sGhost.tool == pThis) {
@@ -210,6 +228,8 @@ void GhostPreview::Install()
 	for (auto&& [slot, expected] : expectedSlots) {
 		THROW_HR_IF(E_FAIL, *reinterpret_cast<const uint32_t*>(cSC4ViewInputControlNetworkIntxTool::kVTable + slot) != expected);
 	}
+	constexpr uint32_t renderSlotAddress = cSC4ModelBasedParticlesEffect::kVTable + cSC4ModelBasedParticlesEffect::kRenderActiveParticlesSlot;
+	THROW_HR_IF(E_FAIL, *reinterpret_cast<const uint32_t*>(renderSlotAddress) != cSC4ModelBasedParticlesEffect::kRenderActiveParticles);
 
 	patchToolSlot(IntxTool_Shutdown_Slot, IntxTool_Shutdown, origShutdown, &Hook_Shutdown);
 	patchToolSlot(IntxTool_OnKeyDown_Slot, IntxTool_OnKeyDown, origOnKeyDown, &Hook_OnKeyDown);
@@ -218,4 +238,6 @@ void GhostPreview::Install()
 	patchToolSlot(IntxTool_OnMouseMove_Slot, IntxTool_OnMouseMove, origOnMouseMove, &Hook_OnMouseMove);
 	patchToolSlot(IntxTool_OnMouseExit_Slot, IntxTool_OnMouseExit, origOnMouseExit, &Hook_OnMouseExit);
 	patchToolSlot(IntxTool_DeletingDtor_Slot, IntxTool_DeletingDtor, origDeletingDtor, &Hook_DeletingDtor);
+	origRenderActiveParticles = reinterpret_cast<cSC4ModelBasedParticlesEffect::pfn_RenderActiveParticles>(Patching::PatchVTableSlot(
+			renderSlotAddress, cSC4ModelBasedParticlesEffect::kRenderActiveParticles, reinterpret_cast<void*>(&Hook_RenderActiveParticles)));
 }

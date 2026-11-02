@@ -47,15 +47,42 @@ class cSC4VisualEffect
 static_assert(offsetof(cSC4VisualEffect, componentsBegin) == 0x114);
 static_assert(offsetof(cSC4VisualEffect, componentsEnd) == 0x118);
 
+class cSC4EffectsParticle
+{
+	public:
+		uint8_t RESERVED[0x34];
+		float alphaFactor;  // multiplied with the alpha curve when rendering
+		float colorFactor[3];  // multiplied with the color curve when rendering
+};
+static_assert(offsetof(cSC4EffectsParticle, alphaFactor) == 0x34);
+static_assert(offsetof(cSC4EffectsParticle, colorFactor) == 0x38);
+
+class cSC4ParticleListNode
+{
+	public:
+		cSC4ParticleListNode* next;
+		uint8_t RESERVED[0x4];
+		cSC4EffectsParticle* particle;
+};
+static_assert(offsetof(cSC4ParticleListNode, particle) == 0x8);
+
+class SC4DrawContext;
+
 class cSC4ModelBasedParticlesEffect
 {
 	public:
 		static constexpr uint32_t kVTable = 0xaa0c58;
+		static constexpr uint32_t kRenderActiveParticlesSlot = 0x44;
+		static constexpr uint32_t kRenderActiveParticles = 0x5add50;
+		typedef void (__thiscall* pfn_RenderActiveParticles)(cSC4ModelBasedParticlesEffect* pThis, SC4DrawContext* drawContext);
 
 		void* vtable;
-		uint8_t RESERVED[0x21c];
+		uint8_t RESERVED[0x10];
+		cSC4ParticleListNode* particles;  // sentinel node of a circular list
+		uint8_t RESERVED[0x208];
 		cIS3DModelInstance* modelInstance;
 };
+static_assert(offsetof(cSC4ModelBasedParticlesEffect, particles) == 0x14);
 static_assert(offsetof(cSC4ModelBasedParticlesEffect, modelInstance) == 0x220);
 
 class cSC4ViewInputControlNetworkIntxTool
