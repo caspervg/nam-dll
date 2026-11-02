@@ -22,8 +22,11 @@ namespace
 			float x;
 			float y;
 			float z;
-			uint8_t RESERVED[0x14];
+			uint32_t color;  // BGRA, the alpha is always 0xff
+			float textureCoords[2];  // set by AssignTerrainAndWaterTextureCoordinates
+			uint8_t RESERVED[0x8];  // zeroed on init, probably a second texture coordinate
 	};
+	static_assert(offsetof(cSTETerrainViewPoint, color) == 0xc);
 	static_assert(sizeof(cSTETerrainViewPoint) == 0x20);
 
 	cSTETerrainViewPoint** const spPoints = reinterpret_cast<cSTETerrainViewPoint**>(0xb4c758);

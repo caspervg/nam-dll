@@ -126,18 +126,18 @@ namespace
 	// Only the render transform is moved, as the particles are pinned to the terrain when they are emitted.
 	void renderShifted(cSC4ModelBasedParticlesEffect* particles, SC4DrawContext* drawContext, const cS3DVector3& shift)
 	{
-		float* translation = particles->transformTranslation;
-		bool hasTranslation = particles->transformFlags != 0;
+		cS3DVector3& translation = particles->transform.translation;
+		bool hasTranslation = particles->transform.flags != 0;
 		if (hasTranslation) {
-			translation[0] += shift.fX;
-			translation[1] += shift.fY;
-			translation[2] += shift.fZ;
+			translation.fX += shift.fX;
+			translation.fY += shift.fY;
+			translation.fZ += shift.fZ;
 		}
 		RenderActiveParticles(particles, drawContext);
 		if (hasTranslation) {
-			translation[0] -= shift.fX;
-			translation[1] -= shift.fY;
-			translation[2] -= shift.fZ;
+			translation.fX -= shift.fX;
+			translation.fY -= shift.fY;
+			translation.fZ -= shift.fZ;
 		}
 	}
 
@@ -167,9 +167,9 @@ namespace
 		}
 
 		cS3DVector3 shift = getToleranceShift(drawContext);
-		if (gradingEnabled && pThis->transformFlags != 0) {
+		if (gradingEnabled && pThis->transform.flags != 0) {
 			// the preview is pinned to the actual terrain, so it is moved onto the previewed terrain at its position
-			shift.fY += TerrainPreview::GetHeightChange(pThis->transformTranslation[0], pThis->transformTranslation[2]);
+			shift.fY += TerrainPreview::GetHeightChange(pThis->transform.translation.fX, pThis->transform.translation.fZ);
 		}
 		for (auto particles : ghostModels) {
 			// the particles are re-emitted all the time, so their color is set every frame

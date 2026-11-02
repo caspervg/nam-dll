@@ -8,6 +8,7 @@
 #include "SC4Rect.h"
 #include "cISC4City.h"
 #include "cS3DVector3.h"
+#include "cISTETerrain.h"
 
 // The RESERVED macro provides names for reserved or unknown struct fields
 #define _CONCATNAM(x,y) x ## y
@@ -156,7 +157,7 @@ class cSC4NetworkTool
 		void* vtable;
 		intptr_t RESERVED[6];
 		cSC4NetworkWorldCache networkWorldCache;
-		uint8_t RESERVED[4];
+		cISTETerrain* terrain;
 		intptr_t occupantManager;
 		uint8_t RESERVED[4];
 		bool placeById;
@@ -178,6 +179,7 @@ class cSC4NetworkTool
 		uint8_t RESERVED[0x270 - 0x250];
 };
 static_assert(offsetof(cSC4NetworkTool, networkWorldCache) == 0x1c);
+static_assert(offsetof(cSC4NetworkTool, terrain) == 0x44);
 static_assert(offsetof(cSC4NetworkTool, draggedSteps) == 0x54);
 static_assert(offsetof(cSC4NetworkTool, solvedCells) == 0x98);
 static_assert(offsetof(cSC4NetworkTool, vertexHtConstraintSatisfier1) == 0x124);

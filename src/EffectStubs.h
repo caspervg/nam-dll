@@ -10,8 +10,14 @@
 class cS3DTransform
 {
 	public:
-		uint8_t RESERVED[0x38];
+		uint8_t RESERVED[1];
+		uint8_t flags;  // 0 if identity, in which case the translation is unused
+		uint8_t RESERVED[0x26];  // probably the rotation and scale
+		cS3DVector3 translation;
+		uint8_t RESERVED[0x4];
 };
+static_assert(offsetof(cS3DTransform, flags) == 0x1);
+static_assert(offsetof(cS3DTransform, translation) == 0x28);
 static_assert(sizeof(cS3DTransform) == 0x38);
 
 class SC4DrawAttributes
@@ -20,6 +26,7 @@ class SC4DrawAttributes
 		enum Flags : uint8_t {
 			kApplyAlpha = 0x02,
 			kSelfLit = 0x04,
+			kNoDepth = 0x10,  // no depth test or write
 			kDepthGreaterNoWrite = 0x20,  // only draws where something else is in front
 		};
 
@@ -100,28 +107,45 @@ class cSC4ModelBasedParticlesEffect
 		void* vtable;
 		uint8_t RESERVED[0x10];
 		cSC4ParticleListNode* particles;  // sentinel of a circular list
-		uint8_t RESERVED[0xad];
-		uint8_t transformFlags;  // world transform at +0xc4; 0 if identity, in which case the translation is unused
-		uint8_t RESERVED[0x26];
-		float transformTranslation[3];
-		uint8_t RESERVED[0x128];
+		uint8_t RESERVED[0xac];
+		cS3DTransform transform;  // world transform used for rendering
+		uint8_t RESERVED[0xd4];
+		float alphaScale;  // SetFloatParams(3)
+		uint8_t RESERVED[0x4c];
 		cIS3DModelInstance* modelInstance;
+		uint8_t RESERVED[0x5c];
 };
 static_assert(offsetof(cSC4ModelBasedParticlesEffect, particles) == 0x14);
-static_assert(offsetof(cSC4ModelBasedParticlesEffect, transformFlags) == 0xc5);
-static_assert(offsetof(cSC4ModelBasedParticlesEffect, transformTranslation) == 0xec);
+static_assert(offsetof(cSC4ModelBasedParticlesEffect, transform) == 0xc4);
+static_assert(offsetof(cSC4ModelBasedParticlesEffect, alphaScale) == 0x1d0);
 static_assert(offsetof(cSC4ModelBasedParticlesEffect, modelInstance) == 0x220);
+static_assert(sizeof(cSC4ModelBasedParticlesEffect) == 0x280);
 
 class cSC4ViewInputControlNetworkIntxTool
 {
 	public:
 		static constexpr uint32_t kVTable = 0xaaaf20;
 
-		uint8_t RESERVED[0x40];
+		uint8_t RESERVED[0x2c];
+		float cellSize;
+		cS3DVector3 position;  // cursor position snapped to the cell center
+		uint8_t RESERVED[0x4];
 		cISC4VisualEffect* previewEffect;
-		uint8_t RESERVED[0x34];
-		const char* previewNameBegin;
+		uint8_t RESERVED[0x4];  // cSC4LocalGridHelper
+		nSC4Networks::cIntRule* intRule;  // rule of the current or last attempted placement
+		uint32_t intRuleId;
+		int32_t placementX;  // cell of the last valid placement
+		int32_t placementZ;
+		int64_t placementCost;
+		uint8_t RESERVED[0x18];
+		const char* previewNameBegin;  // name of the preview effect, with "_red" appended if the placement is not valid
 		const char* previewNameEnd;
+		uint8_t RESERVED[0x8];
+		bool isPlacementValid;
 };
+static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, cellSize) == 0x2c);
 static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, previewEffect) == 0x40);
+static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, intRule) == 0x48);
+static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, placementCost) == 0x58);
 static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, previewNameBegin) == 0x78);
+static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, isPlacementValid) == 0x88);
