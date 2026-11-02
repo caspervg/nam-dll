@@ -202,45 +202,57 @@ namespace
 		return std::find(components.begin(), components.end(), component) != components.end();
 	}
 
+	// Renders with the world transform temporarily moved by `shift`. Only the render transform is moved, as particle
+	// positions get pinned to the terrain when they are emitted.
+	void renderShifted(cSC4ModelBasedParticlesEffect* component, SC4DrawContext* drawContext, const cS3DVector3& shift)
+	{
+		float* translation = component->transformTranslation;
+		const bool shifted = component->transformFlags != 0;
+		if (shifted) {
+			translation[0] += shift.fX;
+			translation[1] += shift.fY;
+			translation[2] += shift.fZ;
+		}
+		origRenderActiveParticles(component, drawContext);
+		if (shifted) {
+			translation[0] -= shift.fX;
+			translation[1] -= shift.fY;
+			translation[2] -= shift.fZ;
+		}
+	}
+
 	// Shared by all model-based particle effects, so only the components of the preview and its ghost are affected.
 	void __fastcall Hook_RenderActiveParticles(cSC4ModelBasedParticlesEffect* pThis, void* edxUnused, SC4DrawContext* drawContext)
 	{
 		if (contains(sGhost.ghostComponents, pThis)) {
 			return;  // rendered together with the preview below
 		}
-		if (contains(sGhost.sourceComponents, pThis)) {
-			// render the ghost first, before the preview writes its depth
-			cS3DVector3 shift(0.0f);  // towards the camera; with an orthographic camera, this only changes the depth
-			if (ghostDepthTolerance != 0.0f && drawContext->camera != nullptr) {
-				const cS3DVector3 position = GetCameraPosition(drawContext->camera);
-				const cS3DVector3& lookAt = drawContext->camera->vPos;
-				shift = cS3DVector3(position.fX - lookAt.fX, position.fY - lookAt.fY, position.fZ - lookAt.fZ);
-				if (shift.Length() > 0.0f) {
-					shift.SetLength(ghostDepthTolerance);
-				}
-			}
-			for (auto ghostComponent : sGhost.ghostComponents) {
-				// particles are re-emitted continuously, so their color factors are overwritten before every frame
-				for (auto node = ghostComponent->particles->next; node != ghostComponent->particles; node = node->next) {
-					std::copy(std::begin(ghostColor), std::end(ghostColor), node->particle->colorFactor);
-				}
-				// shift the render transform only, as particle positions get pinned to the terrain when emitted
-				float* translation = ghostComponent->transformTranslation;
-				const bool shifted = ghostComponent->transformFlags != 0;
-				if (shifted) {
-					translation[0] += shift.fX;
-					translation[1] += shift.fY;
-					translation[2] += shift.fZ;
-				}
-				origRenderActiveParticles(ghostComponent, drawContext);
-				if (shifted) {
-					translation[0] -= shift.fX;
-					translation[1] -= shift.fY;
-					translation[2] -= shift.fZ;
-				}
+		if (!contains(sGhost.sourceComponents, pThis)) {
+			origRenderActiveParticles(pThis, drawContext);
+			return;
+		}
+
+		// Both the preview and its ghost are moved towards the camera by the tolerance. With an orthographic camera, this
+		// only changes their depth: parts buried less deeply are drawn as the regular preview, deeper ones as the ghost.
+		cS3DVector3 shift(0.0f);
+		if (ghostDepthTolerance != 0.0f && drawContext->camera != nullptr) {
+			const cS3DVector3 position = GetCameraPosition(drawContext->camera);
+			const cS3DVector3& lookAt = drawContext->camera->vPos;
+			shift = cS3DVector3(position.fX - lookAt.fX, position.fY - lookAt.fY, position.fZ - lookAt.fZ);
+			if (shift.Length() > 0.0f) {
+				shift.SetLength(ghostDepthTolerance);
 			}
 		}
-		origRenderActiveParticles(pThis, drawContext);
+
+		// render the ghost first, before the preview writes its depth
+		for (auto ghostComponent : sGhost.ghostComponents) {
+			// particles are re-emitted continuously, so their color factors are overwritten before every frame
+			for (auto node = ghostComponent->particles->next; node != ghostComponent->particles; node = node->next) {
+				std::copy(std::begin(ghostColor), std::end(ghostColor), node->particle->colorFactor);
+			}
+			renderShifted(ghostComponent, drawContext, shift);
+		}
+		renderShifted(pThis, drawContext, shift);
 	}
 
 	void* __fastcall Hook_DeletingDtor(cSC4ViewInputControlNetworkIntxTool* pThis, void* edxUnused, uint32_t flags)

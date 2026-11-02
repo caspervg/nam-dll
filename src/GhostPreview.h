@@ -11,7 +11,7 @@
 // preview is occluded.
 namespace GhostPreview
 {
-	// depthTolerance: distance (in meters, along the view direction) by which the ghost is moved towards the camera
-	// while rendering, so that geometry only slightly below the terrain (e.g. ramp walls) is not shown
+	// depthTolerance: distance (in meters, along the view direction) by which preview and ghost are moved towards the camera
+	// while rendering, so that geometry only slightly below the terrain is still drawn as the regular preview
 	void Install(float depthTolerance);
 }
