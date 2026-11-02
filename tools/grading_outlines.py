@@ -5,7 +5,7 @@ Each texture outlines a terrain cell on the sides given by its instance ID, so t
   bits 4-7: a corner piece in the (x-min, z-min), (x-min, z-max), (x-max, z-min) and (x-max, z-max) corner,
             which connects the outline at concave corners of the region
 
-Terrain selections map texture rows to x and columns to z (without rotation), so the x-min side is the top row of the image.
+Terrain selections map texture columns to x and rows to z (without rotation), so the x-min side is the left column of the image.
 The textures are white, so the selection color is used as is. The line has the same profile as the game's tile outline 0x144161da.
 
 Usage: python grading_outlines.py <output.dat> [preview directory]
@@ -43,7 +43,7 @@ def masks():
 
 
 def alpha(mask, row, column):
-    distances = {X_MIN: row, X_MAX: SIZE - 1 - row, Z_MIN: column, Z_MAX: SIZE - 1 - column}
+    distances = {X_MIN: column, X_MAX: SIZE - 1 - column, Z_MIN: row, Z_MAX: SIZE - 1 - row}
     result = 0
     for side, distance in distances.items():
         if mask & side:
