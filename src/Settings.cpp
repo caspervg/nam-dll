@@ -16,6 +16,7 @@ Settings::Settings() :
 	enableDualNetworkTransitPatch(false),
 	enableTransportMenuPatch(true),
 	enableGhostPreviewPatch(true),
+	ghostPreviewDepthOffset(2),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -42,6 +43,13 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableDualNetworkTransitPatch", enableDualNetworkTransitPatch);
 			readBoolProp("EnableTransportMenuPatch", enableTransportMenuPatch);
 			readBoolProp("EnableGhostPreviewPatch", enableGhostPreviewPatch);
+			auto readIntProp = [&ini](const std::string propName, int32_t &propValue) {
+				const std::string& value = ini.get("NAM").get(propName);
+				if (!value.empty()) {
+					propValue = std::stoi(value);
+				}
+			};
+			readIntProp("GhostPreviewDepthOffset", ghostPreviewDepthOffset);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}

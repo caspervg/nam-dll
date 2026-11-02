@@ -199,7 +199,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableVerticalPathSeparationPatch, "Vertical Path Separation patch", PathJumping::Install);
 		InstallWhen(settings.enableDualNetworkTransitPatch, "Dual Network Transit patch", TransitNetworkMapping::Install);
 		InstallWhen(settings.enableTransportMenuPatch, "Transport Menu (Seaport/Airport) patch", TransportMenuPatch::Install);
-		InstallWhen(settings.enableGhostPreviewPatch, "Ghost Preview patch for puzzle pieces", GhostPreview::Install);
+		InstallWhen(settings.enableGhostPreviewPatch, "Ghost Preview patch for puzzle pieces", [&settings](){ GhostPreview::Install(settings.ghostPreviewDepthOffset); });
 	}
 }
 

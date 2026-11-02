@@ -23,6 +23,7 @@ namespace
 	constexpr uint32_t particleParamAlphaScale = 3;  // cSC4ParticlesEffect::SetFloatParams
 	constexpr float ghostAlphaScale = 0.75f;
 	constexpr float ghostColor[3] = {0.55f, 0.8f, 1.0f};  // light blue tint
+	int32_t ghostDepthOffset = 0;
 
 	constexpr size_t s3dTransformSize = 0x38;
 
@@ -209,12 +210,19 @@ namespace
 		}
 		if (contains(sGhost.sourceComponents, pThis)) {
 			// render the ghost first, before the preview writes its depth
+			const int32_t previousDepthOffset = drawContext->depthOffset;
+			if (ghostDepthOffset != 0) {
+				SC4DrawContext::SetDepthOffset(drawContext, previousDepthOffset + ghostDepthOffset);
+			}
 			for (auto ghostComponent : sGhost.ghostComponents) {
 				// particles are re-emitted continuously, so their color factors are overwritten before every frame
 				for (auto node = ghostComponent->particles->next; node != ghostComponent->particles; node = node->next) {
 					std::copy(std::begin(ghostColor), std::end(ghostColor), node->particle->colorFactor);
 				}
 				origRenderActiveParticles(ghostComponent, drawContext);
+			}
+			if (ghostDepthOffset != 0) {
+				SC4DrawContext::SetDepthOffset(drawContext, previousDepthOffset);
 			}
 		}
 		origRenderActiveParticles(pThis, drawContext);
@@ -236,8 +244,10 @@ namespace
 	}
 }
 
-void GhostPreview::Install()
+void GhostPreview::Install(int32_t depthOffset)
 {
+	ghostDepthOffset = depthOffset;
+
 	// verify every slot before patching any, so that a mismatch leaves the vtable untouched
 	constexpr std::pair<uint32_t, uint32_t> expectedSlots[] = {
 		{IntxTool_Shutdown_Slot, IntxTool_Shutdown},

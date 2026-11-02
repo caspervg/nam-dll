@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 // Shows the parts of a RUL0 puzzle-piece preview that are hidden by terrain as a
 // dimmed "ghost".
@@ -11,5 +12,7 @@
 // preview is occluded.
 namespace GhostPreview
 {
-	void Install();
+	// depthOffset: SC4DrawContext depth offset applied to the ghost, so that geometry only slightly below the
+	// terrain (e.g. ramp walls) is not shown
+	void Install(int32_t depthOffset);
 }

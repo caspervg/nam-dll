@@ -66,7 +66,16 @@ class cSC4ParticleListNode
 };
 static_assert(offsetof(cSC4ParticleListNode, particle) == 0x8);
 
-class SC4DrawContext;
+class SC4DrawContext
+{
+	public:
+		typedef void (__thiscall* pfn_SetDepthOffset)(SC4DrawContext* pThis, int32_t offset);
+		static inline pfn_SetDepthOffset SetDepthOffset = reinterpret_cast<pfn_SetDepthOffset>(0x7d4480);
+
+		uint8_t RESERVED[0xbc];
+		int32_t depthOffset;  // positive values move geometry towards the camera (e.g. 2 for decals)
+};
+static_assert(offsetof(SC4DrawContext, depthOffset) == 0xbc);
 
 class cSC4ModelBasedParticlesEffect
 {
