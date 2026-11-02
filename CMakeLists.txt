@@ -25,6 +25,7 @@ set(NAM_SOURCES
     src/CommuteLoop.cpp
     src/DirtRoadAccess.cpp
     src/FlexPieces.cpp
+    src/GhostPreview.cpp
     src/Logger.cpp
     src/NAMDllDirector.cpp
     src/NetworkSlopes.cpp
