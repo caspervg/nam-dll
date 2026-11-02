@@ -56,6 +56,53 @@ namespace
 	uint32_t appliedVertexCountX = 0;
 	bool cellsHighlighted = false;
 
+	// The highlight colors of cSTESelectedTerrainArea are fixed, so the blue one is changed while the grading is shown.
+	// The colors are only copied into their table on the first draw of a selection, which sets the guard bit.
+	constexpr auto highlightColor = cISTETerrain::eHilightColorType::Blue;
+	float* const highlightColorTable = reinterpret_cast<float*>(0xb4bdc0);  // RGB per color type
+	const uint32_t* const highlightColorTableGuard = reinterpret_cast<uint32_t*>(0xb4bdfc);
+	float* const highlightAlphaTable = reinterpret_cast<float*>(0xab42e4);  // read-only data
+
+	float previewColor[3];
+	float previewAlpha;
+	float originalColor[3];
+	float originalAlpha;
+	bool colorReplaced = false;
+	bool alphaReplaced = false;
+
+	void writeFloat(float* address, float value)
+	{
+		Patching::OverwriteMemory(address, *reinterpret_cast<uint32_t*>(&value));
+	}
+
+	void replaceHighlightColor()
+	{
+		float* color = highlightColorTable + 3 * static_cast<int>(highlightColor);
+		float* alpha = highlightAlphaTable + static_cast<int>(highlightColor);
+		if (!colorReplaced && (*highlightColorTableGuard & 1) != 0) {
+			std::copy(color, color + 3, originalColor);
+			std::copy(std::begin(previewColor), std::end(previewColor), color);
+			colorReplaced = true;
+		}
+		if (!alphaReplaced) {
+			originalAlpha = *alpha;
+			writeFloat(alpha, previewAlpha);
+			alphaReplaced = true;
+		}
+	}
+
+	void restoreHighlightColor()
+	{
+		if (colorReplaced) {
+			std::copy(std::begin(originalColor), std::end(originalColor), highlightColorTable + 3 * static_cast<int>(highlightColor));
+			colorReplaced = false;
+		}
+		if (alphaReplaced) {
+			writeFloat(highlightAlphaTable + static_cast<int>(highlightColor), originalAlpha);
+			alphaReplaced = false;
+		}
+	}
+
 	cISTETerrainView* getTerrainView()
 	{
 		cISC4AppPtr pApp;
@@ -85,9 +132,12 @@ namespace
 		}
 		for (auto& [x, z] : cells) {
 			SC4Point<int> cell = {x, z};
-			pView->MarkSelected(cell, cISTETerrain::eHilightColorType::Blue, false);
+			pView->MarkSelected(cell, highlightColor, false);
 		}
 		cellsHighlighted = !cells.empty();
+		if (cellsHighlighted) {
+			replaceHighlightColor();
+		}
 	}
 
 	void redraw(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
@@ -211,6 +261,7 @@ void TerrainPreview::Clear()
 			pView->ClearCurrentSelections();
 		}
 		cellsHighlighted = false;
+		restoreHighlightColor();
 	}
 	// the terrain view copies the actual terrain again when it changes, so only restore what is still ours
 	if (appliedPoints != nullptr && appliedPoints == *spPoints) {
@@ -246,8 +297,11 @@ float TerrainPreview::GetHeightChange(float x, float z)
 	return north * (1 - tz) + south * tz;
 }
 
-void TerrainPreview::Install()
+void TerrainPreview::Install(const float (&highlightColor)[3], float highlightOpacity)
 {
+	std::copy(std::begin(highlightColor), std::end(highlightColor), previewColor);
+	previewAlpha = std::clamp(highlightOpacity, 0.0f, 1.0f);
+
 	auto callSite = reinterpret_cast<uint8_t*>(InsertIsolatedHighwayIntersection_CallSite);
 	uint32_t target = InsertIsolatedHighwayIntersection_CallSite + 5 + *reinterpret_cast<int32_t*>(callSite + 1);
 	THROW_HR_IF(E_FAIL, callSite[0] != 0xe8 || target != kInsertIsolatedHighwayIntersection);

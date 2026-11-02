@@ -25,5 +25,6 @@ public:
 	int ghostPreviewColor[3];
 	float ghostPreviewAlphaScale;
 	float ghostPreviewDepthTolerance;
+	float ghostPreviewGradingOpacity;
 	bool enableKeyboardShortcuts;
 };

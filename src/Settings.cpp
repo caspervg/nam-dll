@@ -23,6 +23,7 @@ Settings::Settings() :
 	ghostPreviewColor{140, 204, 255},
 	ghostPreviewAlphaScale(0.75f),
 	ghostPreviewDepthTolerance(1.0f),
+	ghostPreviewGradingOpacity(0.2f),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -70,6 +71,7 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readColorProp("GhostPreviewColor", ghostPreviewColor);
 			readFloatProp("GhostPreviewAlphaScale", ghostPreviewAlphaScale);
 			readFloatProp("GhostPreviewDepthTolerance", ghostPreviewDepthTolerance);
+			readFloatProp("GhostPreviewGradingOpacity", ghostPreviewGradingOpacity);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}

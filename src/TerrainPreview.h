@@ -5,7 +5,8 @@
 // The terrain itself is not modified, so nothing in the city reacts to it.
 namespace TerrainPreview
 {
-	void Install();
+	// the changed cells are highlighted with this color and opacity
+	void Install(const float (&highlightColor)[3], float highlightOpacity);
 
 	// call around the intersection tool's OnMouseMove, which only solves a placement when the hovered cell changes
 	void BeginMouseMove();
