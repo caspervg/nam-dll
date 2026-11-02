@@ -148,11 +148,21 @@ namespace
 			return;
 		}
 
+		// keep the preview's own color in the tint, so the ghost of a _red preview stays red
+		float tint[3];
+		std::copy(std::begin(ghostColor), std::end(ghostColor), tint);
+		if (pThis->particles->next != pThis->particles) {
+			const float* sourceColor = pThis->particles->next->particle->colorFactor;
+			for (int i = 0; i < 3; i++) {
+				tint[i] *= sourceColor[i];
+			}
+		}
+
 		cS3DVector3 shift = getToleranceShift(drawContext);
 		for (auto particles : ghostModels) {
 			// the particles are re-emitted all the time, so their color is set every frame
 			for (auto node = particles->particles->next; node != particles->particles; node = node->next) {
-				std::copy(std::begin(ghostColor), std::end(ghostColor), node->particle->colorFactor);
+				std::copy(std::begin(tint), std::end(tint), node->particle->colorFactor);
 			}
 			renderShifted(particles, drawContext, shift);
 		}
