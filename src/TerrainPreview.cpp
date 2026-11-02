@@ -31,12 +31,12 @@ namespace
 
 	// The view only redraws regions that changed, so the edited vertices have to be redrawn explicitly.
 	// RedisplayTerrain (0x749850) would also copy the actual terrain into the view again, so only its redraw message is posted.
-	constexpr uint32_t kMsgRedrawTerrainRegion = 0x870bc918;
+	constexpr uint32_t redrawTerrainRegionMessage = 0x870bc918;
 	typedef void (__cdecl* pfn_PostTerrainMessage)(uint32_t messageType, uint32_t data1, uint32_t data2, uint32_t data3, uint32_t data4);
 	pfn_PostTerrainMessage PostTerrainMessage = reinterpret_cast<pfn_PostTerrainMessage>(0x743380);
 
 	constexpr uint32_t InsertIsolatedHighwayIntersection_CallSite = 0x66166f;  // in cSC4ViewInputControlNetworkIntxTool::OnMouseMove
-	constexpr uint32_t kInsertIsolatedHighwayIntersection = 0x62cd50;
+	constexpr uint32_t InsertIsolatedHighwayIntersection_Target = 0x62cd50;
 	constexpr float cellSize = 16.0f;
 	constexpr float minHeightChange = 0.01f;
 
@@ -164,7 +164,7 @@ namespace
 		maxZ += 1;
 		auto heightToData = [](float y) { return static_cast<uint32_t>(std::clamp(y, 0.0f, 65535.0f)); };
 		PostTerrainMessage(
-			kMsgRedrawTerrainRegion,
+			redrawTerrainRegionMessage,
 			minX << 16 | maxX,
 			minZ << 16 | maxZ,
 			heightToData(std::floor(minY) - 1) << 16 | heightToData(std::ceil(maxY) + 1),
@@ -226,7 +226,7 @@ namespace
 	}
 
 	typedef bool (__thiscall* pfn_InsertIsolatedHighwayIntersection)(cSC4NetworkTool* pThis, int32_t x, int32_t z, uint32_t ruleId, uint32_t commit);
-	pfn_InsertIsolatedHighwayIntersection InsertIsolatedHighwayIntersection = reinterpret_cast<pfn_InsertIsolatedHighwayIntersection>(kInsertIsolatedHighwayIntersection);
+	pfn_InsertIsolatedHighwayIntersection InsertIsolatedHighwayIntersection = reinterpret_cast<pfn_InsertIsolatedHighwayIntersection>(InsertIsolatedHighwayIntersection_Target);
 
 	bool __fastcall Hook_InsertIsolatedHighwayIntersection(cSC4NetworkTool* pThis, void*, int32_t x, int32_t z, uint32_t ruleId, uint32_t commit)
 	{
@@ -304,6 +304,6 @@ void TerrainPreview::Install(const float (&highlightColor)[3], float highlightOp
 
 	auto callSite = reinterpret_cast<uint8_t*>(InsertIsolatedHighwayIntersection_CallSite);
 	uint32_t target = InsertIsolatedHighwayIntersection_CallSite + 5 + *reinterpret_cast<int32_t*>(callSite + 1);
-	THROW_HR_IF(E_FAIL, callSite[0] != 0xe8 || target != kInsertIsolatedHighwayIntersection);
+	THROW_HR_IF(E_FAIL, callSite[0] != 0xe8 || target != InsertIsolatedHighwayIntersection_Target);
 	Patching::InstallCallHook(InsertIsolatedHighwayIntersection_CallSite, reinterpret_cast<void (*)(void)>(&Hook_InsertIsolatedHighwayIntersection));
 }
