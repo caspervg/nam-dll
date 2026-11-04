@@ -26,7 +26,9 @@ Settings::Settings() :
 	ghostPreviewGradingOpacity(0.15f),
 	ghostPreviewCutColor{255, 70, 50},
 	ghostPreviewFillColor{80, 220, 80},
-	enableKeyboardShortcuts(true) {};
+	enableKeyboardShortcuts(true),
+	enableFlexPlacementLog(false),
+	flexPlacementLogHids("0x6100-0x61FF,0x6300-0x63FF") {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
 {
@@ -76,6 +78,10 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readFloatProp("GhostPreviewGradingOpacity", ghostPreviewGradingOpacity);
 			readColorProp("GhostPreviewCutColor", ghostPreviewCutColor);
 			readColorProp("GhostPreviewFillColor", ghostPreviewFillColor);
+			readBoolProp("EnableFlexPlacementLog", enableFlexPlacementLog);
+			if (ini.get("NAM").has("FlexPlacementLogHids")) {
+				flexPlacementLogHids = ini.get("NAM").get("FlexPlacementLogHids");
+			}
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}

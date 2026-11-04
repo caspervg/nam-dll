@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <string>
 
 class Settings final
 {
@@ -29,4 +30,6 @@ public:
 	int ghostPreviewCutColor[3];
 	int ghostPreviewFillColor[3];
 	bool enableKeyboardShortcuts;
+	bool enableFlexPlacementLog;
+	std::string flexPlacementLogHids;
 };

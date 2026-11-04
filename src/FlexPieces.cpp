@@ -1,4 +1,5 @@
 #include "FlexPieces.h"
+#include "FlexDiagnostics.h"
 #include "Patching.h"
 #include "NetworkStubs.h"
 #include "Logger.h"
@@ -87,6 +88,7 @@ namespace
 		}
 		networkTool->draggedCells.clear();
 		networkTool->draggedCells.push_back(dummyCell);
+		FlexDiagnostics::OnRule(x, z, rule);  // no-op unless the placement log is enabled and a click is in progress
 	}
 
 	constexpr uint32_t InsertIsolatedHighwayIntersection_InjectPoint = 0x62cedc;

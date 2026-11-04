@@ -25,6 +25,7 @@ set(NAM_SOURCES
     src/CommuteLoop.cpp
     src/DirtRoadAccess.cpp
     src/FlexPieces.cpp
+    src/FlexDiagnostics.cpp
     src/GhostPreview.cpp
     src/TerrainPreview.cpp
     src/Logger.cpp

@@ -49,6 +49,7 @@
 #include "Rul2Engine.h"
 #include "NetworkSlopes.h"
 #include "FlexPieces.h"
+#include "FlexDiagnostics.h"
 #include "CommuteLoop.h"
 #include "DirtRoadAccess.h"
 #include "GhostPreview.h"
@@ -200,6 +201,8 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableDualNetworkTransitPatch, "Dual Network Transit patch", TransitNetworkMapping::Install);
 		InstallWhen(settings.enableTransportMenuPatch, "Transport Menu (Seaport/Airport) patch", TransportMenuPatch::Install);
 		InstallWhen(settings.enableGhostPreviewPatch, "Ghost Preview patch for puzzle pieces", [&settings](){ GhostPreview::Install(settings); });
+		InstallWhen(settings.enableFlexPlacementLog && settings.enableFlexPuzzlePiecePatch, "FLEX placement diagnostics log (NAM_FlexPlacement.log)",
+			[&settings](){ FlexDiagnostics::Install(GetDllFolderPath() / "NAM_FlexPlacement.log", settings.flexPlacementLogHids); });
 	}
 }
 
