@@ -1,5 +1,6 @@
 #pragma once
 #include "stdint.h"
+#include <vector>
 
 #ifdef __clang__
 #define NAKED_FUN __attribute__((naked))
@@ -19,4 +20,6 @@ namespace Patching
 
 	void InstallHook(uint32_t address, void (*pfnFunc)(void));
 	void InstallCallHook(uint32_t address, void (*pfnFunc)(void));
+	void PatchBytes(uint32_t address, const std::vector<uint8_t>& expected, const std::vector<uint8_t>& replacement);
+	void ReplaceWithCall(uint32_t address, const std::vector<uint8_t>& expected, void (*pfnFunc)(void));
 }

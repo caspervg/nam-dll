@@ -112,3 +112,32 @@ void Patching::InstallCallHook(uint32_t address, void (*pfnFunc)(void)) {
 	*((uint8_t*)address) = 0xE8;
 	*((uint32_t*)(address + 1)) = ((uint32_t)pfnFunc) - address - 5;
 }
+
+void Patching::PatchBytes(const uint32_t address, const std::vector<uint8_t>& expected, const std::vector<uint8_t>& replacement)
+{
+	auto* const target = reinterpret_cast<uint8_t*>(address);
+	THROW_HR_IF(E_FAIL, expected.size() != replacement.size());
+	if (std::memcmp(target, replacement.data(), replacement.size()) == 0)
+	{
+		return;
+	}
+
+	THROW_HR_IF(E_FAIL, std::memcmp(target, expected.data(), expected.size()) != 0);
+
+	DWORD oldProtect;
+	THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(target, replacement.size(), PAGE_EXECUTE_READWRITE, &oldProtect));
+	std::memcpy(target, replacement.data(), replacement.size());
+	FlushInstructionCache(GetCurrentProcess(), target, replacement.size());
+	VirtualProtect(target, replacement.size(), oldProtect, &oldProtect);
+}
+
+// Replaces the expected instructions with a call to pfnFunc, padding the remainder with NOPs.
+void Patching::ReplaceWithCall(const uint32_t address, const std::vector<uint8_t>& expected, void (*pfnFunc)(void))
+{
+	THROW_HR_IF(E_FAIL, expected.size() < 5);
+	std::vector<uint8_t> replacement(expected.size(), 0x90);
+	replacement[0] = 0xe8;
+	const uint32_t relativeOffset = reinterpret_cast<uint32_t>(pfnFunc) - address - 5;
+	std::memcpy(&replacement[1], &relativeOffset, sizeof(relativeOffset));
+	PatchBytes(address, expected, replacement);
+}

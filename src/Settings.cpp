@@ -8,10 +8,6 @@
 
 namespace
 {
-	// OWR pairing is incomplete (OWR shares NC type 10 with RHW, so wide OWR does not pair and
-	// neighboring cities get RHW stubs). Kept disabled until that is resolved.
-	constexpr bool kOWRNeighborConnectionsSupported = false;
-
 	std::string Trim(std::string value)
 	{
 		auto isSpace = [](const unsigned char ch)
@@ -65,14 +61,7 @@ namespace
 			}
 			else if (token == "OWR")
 			{
-				if (kOWRNeighborConnectionsSupported)
-				{
-					enableOWR = true;
-				}
-				else
-				{
-					Logger::GetInstance().WriteLine(LogLevel::Info, "OWR neighbor connections are not supported yet, ignoring OWR in NeighborConnectionNetworks.");
-				}
+				enableOWR = true;
 			}
 			else if (token == "NWM")
 			{
@@ -84,11 +73,6 @@ namespace
 				break;
 			}
 			tokenStart = tokenEnd + 1;
-		}
-
-		if (enableOWR)
-		{
-			enableRHW = true;
 		}
 	}
 }

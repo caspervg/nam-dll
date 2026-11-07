@@ -28,9 +28,11 @@
 	- RHW/DirtRoad: adds the DirtRoad neighbor connection bit to the game's
 	  divided-network mask.
 
-	- OWR: changes OWR's neighbor connection type from "none" to the same
-	  DirtRoad/RHW type. Because of that, enabling OWR necessarily also
-	  enables the RHW part of this patch.
+	- OWR: maps OWR to a new neighbor connection type 13, which is persisted so
+	  neighboring cities create OWR stubs. Traffic code sees it as the DirtRoad/RHW
+	  type 10 (via GetType). The per-tile mask carries both bits, and the OWR bit
+	  selects OWR pairing, independent of the RHW setting. Without the DLL, a
+	  saved type 13 connection carries no traffic but does not break the game.
 
 	- NWM: adds Road to the divided-network mask, but only uses the custom
 	  return search when the Road edge tile is clearly one-way (i.e. half of a AVE-6).
@@ -86,13 +88,14 @@ namespace
 		Avenue = 8,
 		DirtRoad = 10,
 		GroundHighway = 12,
+		OneWayRoad = 13,  // new, added by this patch
 	};
 
 	constexpr uint16_t kVanillaDividedNetworkNcMask = 0x1108;
 	static_assert(kVanillaDividedNetworkNcMask == asMask(NcType::Highway, NcType::Avenue, NcType::GroundHighway));
 	constexpr uint16_t kRoadNcMask = asMask(NcType::Road);
 	constexpr uint16_t kDirtRoadNcMask = asMask(NcType::DirtRoad);
-	constexpr uint16_t kOWRMetadataNcMask = 0x2000;
+	constexpr uint16_t kOneWayRoadNcMask = asMask(NcType::OneWayRoad);
 
 	constexpr uint32_t kMinSearchDistance = 1;
 	constexpr uint32_t kMaxSearchDistance = 64;
@@ -605,12 +608,16 @@ namespace
 		return IsOneWayDirection(pathDirection);
 	}
 
-	uint16_t BuildPatchedNeighborConnectionMask(const bool enableRHW, const bool enableNWM)
+	uint16_t BuildPatchedNeighborConnectionMask(const bool enableRHW, const bool enableOWR, const bool enableNWM)
 	{
 		uint16_t mask = kVanillaDividedNetworkNcMask;
 		if (enableRHW)
 		{
 			mask |= kDirtRoadNcMask;
+		}
+		if (enableOWR)
+		{
+			mask |= kOneWayRoadNcMask;
 		}
 		if (enableNWM)
 		{
@@ -624,10 +631,12 @@ namespace
 		const int32_t originX = *pX;
 		const int32_t originZ = *pZ;
 		const uint16_t originMask = GetNeighborConnectionMask(pTrafficSim, originX, originZ);
-		const bool useRHWPairing = (originMask & kDirtRoadNcMask) != 0;
-		const bool useNWMPairing = !useRHWPairing && IsOneWayRoadConnection(pTrafficSim, originX, originZ, originMask);
+		// OWR tiles also carry the DirtRoad bit (traffic sees OWR as type 10), so test OWR first.
+		const bool useOWRPairing = (originMask & kOneWayRoadNcMask) != 0;
+		const bool useRHWPairing = !useOWRPairing && (originMask & kDirtRoadNcMask) != 0;
+		const bool useNWMPairing = !useOWRPairing && !useRHWPairing && IsOneWayRoadConnection(pTrafficSim, originX, originZ, originMask);
 
-		if (!useRHWPairing && !useNWMPairing)
+		if (!useOWRPairing && !useRHWPairing && !useNWMPairing)
 		{
 			// Vanilla divided networks keep the vanilla step. Anything else here is an ordinary
 			// Road NC that only passed the mask test because NWM added Road, so it stays unchanged.
@@ -640,7 +649,7 @@ namespace
 
 		int32_t stepX = 0;
 		int32_t stepZ = 0;
-		if (useRHWPairing)
+		if (useOWRPairing || useRHWPairing)
 		{
 			cSC4TrafficSimulator::FindHighwayReturnTile(pTrafficSim, pX, pZ, reverseSearch);
 			stepX = *pX - originX;
@@ -653,8 +662,7 @@ namespace
 			return;
 		}
 
-		const uint16_t eligibleNcMask = useRHWPairing ? kDirtRoadNcMask : kRoadNcMask;
-		const bool useOWRPairing = useRHWPairing && (originMask & kOWRMetadataNcMask) != 0;
+		const uint16_t eligibleNcMask = useOWRPairing ? kOneWayRoadNcMask : (useRHWPairing ? kDirtRoadNcMask : kRoadNcMask);
 		const bool allowBidiSource = useOWRPairing;
 		const bool allowBidiTarget = useOWRPairing || useNWMPairing;
 		bool paired = TryFindPairedReturnTile(
@@ -672,11 +680,111 @@ namespace
 			*pZ = originZ;
 		}
 	}
+
+	// OWR neighbor connections use type 13. The persisted cSC4NeighborConnection type (offset 0x24)
+	// stays 13 so neighboring cities create OWR stubs, while GetType reports 10 so the traffic code
+	// treats OWR like RHW. The sites that need the real type read offset 0x24 directly.
+	constexpr uint32_t kOneWayRoadNcType = static_cast<uint32_t>(NcType::OneWayRoad);
+	constexpr uint32_t kOneWayRoadTileMask = asMask(NcType::DirtRoad, NcType::OneWayRoad);
+
+	constexpr uint32_t NeighborConnection_GetTypeSlot = 0xab2048;  // cSC4NeighborConnection vtable 0xab2034, slot 0x14
+	constexpr uint32_t NeighborConnection_GetTypeOrig = 0x6bdd80;  // accessor shared with other classes, so patch the slot only
+	constexpr uint32_t TreatAllIncomingConnectionsAsNew_GetType = 0x4a937a;
+	constexpr uint32_t ChangeSymmetricConnection_GetType = 0x4a8e44;
+	constexpr uint32_t AddNeighborConnection_TileMask = 0x71540a;
+	constexpr uint32_t RemoveNeighborConnection_TileMask = 0x713aff;
+	constexpr uint32_t NeighborsSim_FindConnection_GetType = 0x6cf6d8;
+	constexpr uint32_t CreateSymmetricConnections_TypeBound = 0x4aaa73;
+	constexpr uint32_t CreateSymmetricConnections_JumpTableEntry13 = 0x4ab7e8;  // padding right after the 12-entry table
+	constexpr uint32_t CreateSymmetricConnections_CreateStub = 0x4aaa96;
+
+	uint32_t __fastcall NeighborConnection_GetType(const uint8_t* const pConnection, void*)
+	{
+		const uint32_t type = *reinterpret_cast<const uint32_t*>(pConnection + 0x24);
+		return type == kOneWayRoadNcType ? static_cast<uint32_t>(NcType::DirtRoad) : type;
+	}
+
+	// edx = 1 << type. An OWR connection (esi) sets both the DirtRoad and OWR bits, whichever type the caller passed.
+	void NAKED_FUN Hook_AddNeighborConnection_TileMask(void)
+	{
+		__asm {
+			mov edx, 1;
+			shl edx, cl;
+			cmp dword ptr [esi + 0x24], 13;  // raw type == OneWayRoad
+			jne done;
+			or edx, kOneWayRoadTileMask;
+done:
+			ret;
+		}
+	}
+
+	// edx = ~(1 << type). Removal passes GetType (10 for OWR), so types 10 and 13 clear both bits.
+	void NAKED_FUN Hook_RemoveNeighborConnection_TileMask(void)
+	{
+		__asm {
+			mov edx, 1;
+			shl edx, cl;
+			cmp ecx, 10;
+			je both;
+			cmp ecx, 13;
+			jne invert;
+both:
+			or edx, kOneWayRoadTileMask;
+invert:
+			not edx;
+			ret;
+		}
+	}
+
+	// eax = type of connection esi, compared with the requested type in ebp afterwards.
+	// OWR connections match a request for either 13 or 10.
+	void NAKED_FUN Hook_FindConnection_GetType(void)
+	{
+		__asm {
+			mov eax, dword ptr [esi + 0x24];
+			cmp eax, ebp;
+			je done;
+			cmp eax, 13;
+			jne done;
+			mov eax, 10;
+done:
+			ret;
+		}
+	}
+
+	// Jump table case for type 13: create the stub with network type OneWayRoad.
+	void NAKED_FUN Hook_CreateSymmetricConnections_OneWayRoad(void)
+	{
+		__asm {
+			mov dword ptr [esp + 0x14], 10;  // network type OneWayRoad
+			push CreateSymmetricConnections_CreateStub;
+			ret;
+		}
+	}
+
+	void InstallOneWayRoadConnections()
+	{
+		Patching::PatchImmediate32(NeighborConnection_GetTypeSlot, NeighborConnection_GetTypeOrig, reinterpret_cast<uint32_t>(&NeighborConnection_GetType));
+
+		// call [edx+0x14] (GetType) -> mov eax, [esi+0x24], so incoming connection changes keep type 13
+		Patching::PatchBytes(TreatAllIncomingConnectionsAsNew_GetType, {0xff, 0x52, 0x14}, {0x8b, 0x46, 0x24});
+		Patching::PatchBytes(ChangeSymmetricConnection_GetType, {0xff, 0x52, 0x14}, {0x8b, 0x46, 0x24});
+
+		Patching::ReplaceWithCall(AddNeighborConnection_TileMask, {0xba, 0x01, 0x00, 0x00, 0x00, 0xd3, 0xe2}, Hook_AddNeighborConnection_TileMask);
+		Patching::ReplaceWithCall(RemoveNeighborConnection_TileMask, {0xba, 0x01, 0x00, 0x00, 0x00, 0xd3, 0xe2, 0xf7, 0xd2}, Hook_RemoveNeighborConnection_TileMask);
+		Patching::ReplaceWithCall(NeighborsSim_FindConnection_GetType, {0x8b, 0x06, 0x8b, 0xce, 0xff, 0x50, 0x14}, Hook_FindConnection_GetType);
+
+		// Add the table entry before raising the bound that makes it reachable.
+		Patching::PatchImmediate32(CreateSymmetricConnections_JumpTableEntry13, 0xcccccccc, reinterpret_cast<uint32_t>(&Hook_CreateSymmetricConnections_OneWayRoad));
+		Patching::PatchBytes(CreateSymmetricConnections_TypeBound, {0x83, 0xf8, 0x0b}, {0x83, 0xf8, 0x0c});
+
+		// Last, so that if anything above fails, the game never creates type 13 connections.
+		Patching::PatchImmediate32(kOWRNetworkToNcAddress, static_cast<uint32_t>(NcType::None), kOneWayRoadNcType);
+	}
 }
 
 void NeighborConnections::Install(const Options& options)
 {
-	const bool enableRHW = options.enableRHW || options.enableOWR; // For OWR to be enabled, RHW needs to be enabled
 	gEnableNWM = options.enableNWM;
 	gMaxSearchDistance = std::clamp(options.maxSearchDistance, kMinSearchDistance, kMaxSearchDistance);
 	gMaxGroupingGap = std::min(options.maxGroupingGap, kMaxGroupingGap);
@@ -684,17 +792,13 @@ void NeighborConnections::Install(const Options& options)
 	Patching::InstallCallHook(kForwardPathFindReturnTileCallAddress, reinterpret_cast<void (*)()>(FindReturnTile));
 	Patching::InstallCallHook(kReturnPathFindReturnTileCallAddress, reinterpret_cast<void (*)()>(FindReturnTile));
 
-	// Add the RHW/DirtRoad connection type to the special search algorithm that exists for Avenue/Highway in vanilla
-	const uint16_t patchedMask = BuildPatchedNeighborConnectionMask(enableRHW, options.enableNWM);
+	// Add the enabled connection types to the special search algorithm that exists for Avenue/Highway in vanilla
+	const uint16_t patchedMask = BuildPatchedNeighborConnectionMask(options.enableRHW, options.enableOWR, options.enableNWM);
 	Patching::PatchTestWordPtrEaxImmediate16(kForwardPathNetworkMaskTestAddress, kVanillaDividedNetworkNcMask, patchedMask);
 	Patching::PatchTestWordPtrEaxImmediate16(kReturnPathNetworkMaskTestAddress, kVanillaDividedNetworkNcMask, patchedMask);
 
 	if (options.enableOWR)
 	{
-		// Set the OWR neighbor connection type to the RHW/DirtRoad connection type
-		Patching::PatchImmediate32(
-			kOWRNetworkToNcAddress,
-			static_cast<uint32_t>(NcType::None),
-			static_cast<uint32_t>(NcType::DirtRoad));
+		InstallOneWayRoadConnections();
 	}
 }
