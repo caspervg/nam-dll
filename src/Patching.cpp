@@ -47,6 +47,27 @@ void Patching::OverwriteMemory(void* address, uint32_t newValue)
 	*((uint32_t*)address) = newValue;
 }
 
+void Patching::PatchImmediate16(const uint32_t address, const uint16_t expectedValue, const uint16_t newValue)
+{
+	auto* const immediate = reinterpret_cast<uint16_t*>(address);
+	if (*immediate == newValue)
+	{
+		return;
+	}
+
+	THROW_HR_IF(E_FAIL, *immediate != expectedValue);
+
+	DWORD oldProtect;
+	THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(
+		immediate,
+		sizeof(newValue),
+		PAGE_EXECUTE_READWRITE,
+		&oldProtect));
+
+	std::memcpy(immediate, &newValue, sizeof(newValue));
+	VirtualProtect(immediate, sizeof(newValue), oldProtect, &oldProtect);
+}
+
 void Patching::PatchImmediate32(const uint32_t address, const uint32_t expectedValue, const uint32_t newValue)
 {
 	auto* const immediate = reinterpret_cast<uint32_t*>(address);
@@ -80,6 +101,18 @@ void Patching::PatchTestEaxImmediate32(const uint32_t address, const uint32_t ex
 	const uint8_t* const instruction = reinterpret_cast<uint8_t*>(address);
 	THROW_HR_IF(E_FAIL, instruction[0] != 0xa9);
 	PatchImmediate32(address + 1, expectedValue, newValue);
+}
+
+void Patching::PatchTestWordPtrEaxImmediate16(
+	const uint32_t address,
+	const uint16_t expectedValue,
+	const uint16_t newValue)
+{
+	const uint8_t* const instruction = reinterpret_cast<uint8_t*>(address);
+	THROW_HR_IF(
+		E_FAIL,
+		instruction[0] != 0x66 || instruction[1] != 0xf7 || instruction[2] != 0x00);
+	PatchImmediate16(address + 3, expectedValue, newValue);
 }
 
 void Patching::InstallHook(uint32_t address, void (*pfnFunc)(void))
@@ -194,4 +227,33 @@ void Patching::InstallVTableHook(VTableHook& hook)
 	VirtualProtect(slot, sizeof(void*), oldProtect, &oldProtect);
 
 	hook.installed = true;
+}
+
+void Patching::PatchBytes(const uint32_t address, const std::vector<uint8_t>& expected, const std::vector<uint8_t>& replacement)
+{
+	auto* const target = reinterpret_cast<uint8_t*>(address);
+	THROW_HR_IF(E_FAIL, expected.size() != replacement.size());
+	if (std::memcmp(target, replacement.data(), replacement.size()) == 0)
+	{
+		return;
+	}
+
+	THROW_HR_IF(E_FAIL, std::memcmp(target, expected.data(), expected.size()) != 0);
+
+	DWORD oldProtect;
+	THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(target, replacement.size(), PAGE_EXECUTE_READWRITE, &oldProtect));
+	std::memcpy(target, replacement.data(), replacement.size());
+	FlushInstructionCache(GetCurrentProcess(), target, replacement.size());
+	VirtualProtect(target, replacement.size(), oldProtect, &oldProtect);
+}
+
+// Replaces the expected instructions with a call to pfnFunc, padding the remainder with NOPs.
+void Patching::ReplaceWithCall(const uint32_t address, const std::vector<uint8_t>& expected, void (*pfnFunc)(void))
+{
+	THROW_HR_IF(E_FAIL, expected.size() < 5);
+	std::vector<uint8_t> replacement(expected.size(), 0x90);
+	replacement[0] = 0xe8;
+	const uint32_t relativeOffset = reinterpret_cast<uint32_t>(pfnFunc) - address - 5;
+	std::memcpy(&replacement[1], &relativeOffset, sizeof(relativeOffset));
+	PatchBytes(address, expected, replacement);
 }

@@ -2,6 +2,81 @@
 #include "Logger.h"
 #include "mini/ini.h"
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+
+namespace
+{
+	std::string Trim(std::string value)
+	{
+		auto isSpace = [](const unsigned char ch)
+		{
+			return std::isspace(ch) != 0;
+		};
+
+		value.erase(
+			value.begin(),
+			std::find_if_not(value.begin(), value.end(), isSpace));
+		value.erase(
+			std::find_if_not(value.rbegin(), value.rend(), isSpace).base(),
+			value.end());
+		return value;
+	}
+
+	std::string ToUpper(std::string value)
+	{
+		std::transform(
+			value.begin(),
+			value.end(),
+			value.begin(),
+			[](const unsigned char ch)
+			{
+				return static_cast<char>(std::toupper(ch));
+			});
+		return value;
+	}
+
+	void ReadNeighborConnectionNetworks(
+		const std::string& networkList,
+		bool& enableRHW,
+		bool& enableOWR,
+		bool& enableNWM)
+	{
+		enableRHW = false;
+		enableOWR = false;
+		enableNWM = false;
+
+		size_t tokenStart = 0;
+		while (tokenStart <= networkList.size())
+		{
+			const size_t tokenEnd = networkList.find(',', tokenStart);
+			const std::string token = ToUpper(Trim(networkList.substr(
+				tokenStart,
+				tokenEnd == std::string::npos ? std::string::npos : tokenEnd - tokenStart)));
+
+			if (token == "RHW")
+			{
+				enableRHW = true;
+			}
+			else if (token == "OWR")
+			{
+				enableOWR = true;
+			}
+			else if (token == "NWM")
+			{
+				enableNWM = true;
+			}
+
+			if (tokenEnd == std::string::npos)
+			{
+				break;
+			}
+			tokenStart = tokenEnd + 1;
+		}
+	}
+}
+
 Settings::Settings() :
 	enableDiagonalStreets(true),
 	disableAutoconnect(true),
@@ -13,6 +88,12 @@ Settings::Settings() :
 	enableCommuteLoopPatch(true),
 	enableDirtRoadAccessPatch(false),
 	enableTransitAccessPatch(true),
+	enableNeighborConnectionPatch(false),
+	enableRHWNeighborConnections(false),
+	enableOWRNeighborConnections(false),
+	enableNWMNeighborConnections(false),
+	neighborConnectionMaxSearchDistance(8),
+	neighborConnectionMaxGroupingGap(2),
 	enableVerticalPathSeparationPatch(true),
 	enableDualNetworkTransitPatch(false),
 	enableTransportMenuPatch(true),
@@ -39,6 +120,28 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableCommuteLoopPatch", enableCommuteLoopPatch);
 			readBoolProp("EnableDirtRoadAccessPatch", enableDirtRoadAccessPatch);
 			readBoolProp("EnableTransitAccessPatch", enableTransitAccessPatch);
+			readBoolProp("EnableNeighborConnectionPatch", enableNeighborConnectionPatch);
+
+			ReadNeighborConnectionNetworks(
+				ini.get("NAM").get("NeighborConnectionNetworks"),
+				enableRHWNeighborConnections,
+				enableOWRNeighborConnections,
+				enableNWMNeighborConnections);
+
+			// A bad number must not throw out of Load: that would skip every setting read after it.
+			auto readUIntProp = [&ini, &logger](const std::string propName, uint32_t &propValue) {
+				const std::string value = ini.get("NAM").get(propName);
+				if (value.empty()) {
+					return;
+				}
+				try {
+					propValue = std::stoul(value);
+				} catch (const std::exception&) {
+					logger.WriteLineFormatted(LogLevel::Error, "Ignoring invalid %s value: %s", propName.c_str(), value.c_str());
+				}
+			};
+			readUIntProp("NeighborConnectionMaxSearchDistance", neighborConnectionMaxSearchDistance);
+			readUIntProp("NeighborConnectionMaxGroupingGap", neighborConnectionMaxGroupingGap);
 			readBoolProp("EnableVerticalPathSeparationPatch", enableVerticalPathSeparationPatch);
 			readBoolProp("EnableDualNetworkTransitPatch", enableDualNetworkTransitPatch);
 			readBoolProp("EnableTransportMenuPatch", enableTransportMenuPatch);

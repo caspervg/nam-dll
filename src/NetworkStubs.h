@@ -260,19 +260,8 @@ namespace nSC4Networks
 	static_assert(sizeof(cIntRule) == 0xfc);
 }
 
-class cSC4TrafficSimulator
-{
-	struct TunnelInfo {
-		uint8_t RESERVED[0x2c];
-		// size unconfirmed
-	};
+class cSC4TrafficSimulator;
 
-	public:
-		uint8_t RESERVED[0xc8];
-		SC4HashMap<uint16_t, TunnelInfo> tunnelInfos;
-		// rest unknown, much missing
-};
-static_assert(offsetof(cSC4TrafficSimulator, tunnelInfos) == 0xc8);
 // The traffic network map returned by cISC4City::GetTrafficNetwork.
 // Not yet fully deocded
 class cSC4TrafficNetworkMap
@@ -373,6 +362,36 @@ struct TrafficSimCellConnections  // real name unknown
 	uint8_t RESERVED;
 };
 static_assert(sizeof(TrafficSimCellConnections) == 0x2e);
+
+class cSC4TrafficSimulator
+{
+	struct TunnelInfo {
+		uint8_t RESERVED[0x2c];
+		// size unconfirmed
+	};
+
+	public:
+		uint8_t RESERVED[0x28];
+		int32_t maxCellX;  // cellCountX - 1
+		int32_t maxCellZ;  // cellCountZ - 1
+		uint8_t RESERVED[0x58 - 0x30];
+		TrafficSimCellConnections* cellConnections;  // indexed by (x << 8) | z
+		uint8_t RESERVED[0xc8 - 0x5c];
+		SC4HashMap<uint16_t, TunnelInfo> tunnelInfos;
+		// rest unknown, much missing
+
+		// steps one tile along the city edge to the return carriageway of a divided network
+		typedef void (__thiscall* pfn_FindHighwayReturnTile)(cSC4TrafficSimulator* pThis, int32_t* x, int32_t* z, bool reverseSearch);
+		static inline pfn_FindHighwayReturnTile FindHighwayReturnTile = reinterpret_cast<pfn_FindHighwayReturnTile>(0x70dd30);
+
+		// returns the neighbor connection entry at an outside-edge coordinate; its first uint16 is the NC type mask
+		typedef void* (__thiscall* pfn_GetNeighborConnectionEntry)(cSC4TrafficSimulator* pThis, int32_t x, int32_t z);
+		static inline pfn_GetNeighborConnectionEntry GetNeighborConnectionEntry = reinterpret_cast<pfn_GetNeighborConnectionEntry>(0x70f970);
+};
+static_assert(offsetof(cSC4TrafficSimulator, maxCellX) == 0x28);
+static_assert(offsetof(cSC4TrafficSimulator, maxCellZ) == 0x2c);
+static_assert(offsetof(cSC4TrafficSimulator, cellConnections) == 0x58);
+static_assert(offsetof(cSC4TrafficSimulator, tunnelInfos) == 0xc8);
 
 struct TravelTypeAttr  // real name unknown
 {

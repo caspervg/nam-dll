@@ -52,6 +52,7 @@
 #include "CommuteLoop.h"
 #include "DirtRoadAccess.h"
 #include "TransitAccess.h"
+#include "NeighborConnections.h"
 #include "PathJumping.h"
 #include "TransitNetworkMapping.h"
 #include "TransportMenuPatch.h"
@@ -197,6 +198,19 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
 		InstallWhen(settings.enableDirtRoadAccessPatch, "DirtRoad/RHW Access patch", DirtRoadAccess::Install);
 		InstallWhen(settings.enableTransitAccessPatch, "Transit Access patch", TransitAccess::Install);
+		InstallWhen(
+			settings.enableNeighborConnectionPatch,
+			"Neighbor Connection patch",
+			[&settings]()
+			{
+				NeighborConnections::Options options;
+				options.maxSearchDistance = settings.neighborConnectionMaxSearchDistance;
+				options.maxGroupingGap = settings.neighborConnectionMaxGroupingGap;
+				options.enableRHW = settings.enableRHWNeighborConnections;
+				options.enableOWR = settings.enableOWRNeighborConnections;
+				options.enableNWM = settings.enableNWMNeighborConnections;
+				NeighborConnections::Install(options);
+			});
 		InstallWhen(settings.enableVerticalPathSeparationPatch, "Vertical Path Separation patch", PathJumping::Install);
 		InstallWhen(settings.enableDualNetworkTransitPatch, "Dual Network Transit patch", TransitNetworkMapping::Install);
 		InstallWhen(settings.enableTransportMenuPatch, "Transport Menu (Seaport/Airport) patch", TransportMenuPatch::Install);
