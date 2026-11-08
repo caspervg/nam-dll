@@ -112,8 +112,8 @@ WIREFRAME_TEXTURE = 0x4e474c00
 LINE_MODEL = 0x4e474c01
 DASH_MODEL = 0x4e474c02
 WIREFRAME_EFFECTS = 0x4e474c00
-LINE_WIDTH = 0.4  # meters, about 2 pixels at the closest zoom
-DASH_WIDTH = 0.3
+LINE_WIDTH = 0.3  # meters, a thin line next to the piece preview
+DASH_WIDTH = 0.25
 DASH_LENGTH = 0.8  # the DLL stacks them every 1.6 m
 
 # EFFDIR of the NAM preview effect preview_diagonal_bridge_009 and its _red variant: one model particle each,
