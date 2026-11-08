@@ -53,6 +53,7 @@
 #include "DirtRoadAccess.h"
 #include "TransitAccess.h"
 #include "NeighborConnections.h"
+#include "GhostPreview.h"
 #include "PathJumping.h"
 #include "TransitNetworkMapping.h"
 #include "TransportMenuPatch.h"
@@ -214,6 +215,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableVerticalPathSeparationPatch, "Vertical Path Separation patch", PathJumping::Install);
 		InstallWhen(settings.enableDualNetworkTransitPatch, "Dual Network Transit patch", TransitNetworkMapping::Install);
 		InstallWhen(settings.enableTransportMenuPatch, "Transport Menu (Seaport/Airport) patch", TransportMenuPatch::Install);
+		InstallWhen(settings.enableGhostPreviewPatch, "Ghost Preview patch for puzzle pieces", [&settings](){ GhostPreview::Install(settings); });
 	}
 }
 

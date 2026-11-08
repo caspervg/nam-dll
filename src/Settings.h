@@ -27,5 +27,14 @@ public:
 	bool enableVerticalPathSeparationPatch;
 	bool enableDualNetworkTransitPatch;
 	bool enableTransportMenuPatch;
+	bool enableGhostPreviewPatch;
+	bool ghostPreviewOverlay;
+	bool ghostPreviewGrading;
+	int ghostPreviewColor[3];
+	float ghostPreviewAlphaScale;
+	float ghostPreviewDepthTolerance;
+	float ghostPreviewGradingOpacity;
+	int ghostPreviewCutColor[3];
+	int ghostPreviewFillColor[3];
 	bool enableKeyboardShortcuts;
 };

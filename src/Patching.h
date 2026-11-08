@@ -54,4 +54,7 @@ namespace Patching
 	void InstallVTableHook(VTableHook& hook);
 	void PatchBytes(uint32_t address, const std::vector<uint8_t>& expected, const std::vector<uint8_t>& replacement);
 	void ReplaceWithCall(uint32_t address, const std::vector<uint8_t>& expected, void (*pfnFunc)(void));
+
+	// returns the previous slot value
+	uint32_t PatchVTableSlot(uint32_t slotAddress, uint32_t expectedValue, void* newValue);
 }

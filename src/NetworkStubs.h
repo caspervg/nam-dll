@@ -9,6 +9,7 @@
 #include "SC4Rect.h"
 #include "cISC4City.h"
 #include "cS3DVector3.h"
+#include "cISTETerrain.h"
 
 // The RESERVED macro provides names for reserved or unknown struct fields
 #define _CONCATNAM(x,y) x ## y
@@ -74,6 +75,10 @@ class cSC4VertexHtConstraintSatisfier
 	public:
 		typedef void (__thiscall* pfn_InsertSlopeConstraint)(cSC4VertexHtConstraintSatisfier* pThis, int32_t vertex1, int32_t vertex2, float slope);
 		static inline pfn_InsertSlopeConstraint InsertSlopeConstraint = reinterpret_cast<pfn_InsertSlopeConstraint>(0x65ff60);
+		typedef void (__thiscall* pfn_RewindSolvedVertexList)(cSC4VertexHtConstraintSatisfier* pThis);
+		static inline pfn_RewindSolvedVertexList RewindSolvedVertexList = reinterpret_cast<pfn_RewindSolvedVertexList>(0x65ef70);
+		typedef bool (__thiscall* pfn_GetNextSolvedVertexAndItsHeight)(cSC4VertexHtConstraintSatisfier* pThis, int32_t* vertex, float* height);
+		static inline pfn_GetNextSolvedVertexAndItsHeight GetNextSolvedVertexAndItsHeight = reinterpret_cast<pfn_GetNextSolvedVertexAndItsHeight>(0x65eb50);
 
 		uint8_t RESERVED[0x64];
 };
@@ -153,7 +158,7 @@ class cSC4NetworkTool
 		void* vtable;
 		intptr_t RESERVED[6];
 		cSC4NetworkWorldCache networkWorldCache;
-		uint8_t RESERVED[4];
+		cISTETerrain* terrain;
 		intptr_t occupantManager;
 		uint8_t RESERVED[4];
 		bool placeById;
@@ -170,12 +175,16 @@ class cSC4NetworkTool
 		uint8_t RESERVED[0x240 - 0x1ec];
 		uint32_t numCellsX;
 		uint32_t numCellsZ;
-		uint8_t RESERVED[0x270 - 0x248];
+		uint32_t numVerticesX;  // solved vertex indices are z * numVerticesX + x
+		uint32_t numVerticesZ;
+		uint8_t RESERVED[0x270 - 0x250];
 };
 static_assert(offsetof(cSC4NetworkTool, networkWorldCache) == 0x1c);
+static_assert(offsetof(cSC4NetworkTool, terrain) == 0x44);
 static_assert(offsetof(cSC4NetworkTool, draggedSteps) == 0x54);
 static_assert(offsetof(cSC4NetworkTool, solvedCells) == 0x98);
 static_assert(offsetof(cSC4NetworkTool, vertexHtConstraintSatisfier1) == 0x124);
+static_assert(offsetof(cSC4NetworkTool, numVerticesX) == 0x248);
 static_assert(sizeof(cSC4NetworkTool) == 0x270);
 
 namespace nSC4Networks
