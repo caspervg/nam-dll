@@ -16,8 +16,6 @@ namespace
 {
 	cISC4EffectsManager** const sppEffectsManager = reinterpret_cast<cISC4EffectsManager**>(0xb43d1c);
 
-	constexpr uint32_t particleAlphaScaleParam = 3;  // SetFloatParams
-
 	bool overlayEnabled;
 	bool gradingEnabled;
 	float ghostColor[3];
@@ -48,7 +46,7 @@ namespace
 	void destroyGhost()
 	{
 		if (ghost != nullptr) {
-			ghost->Stop(cISC4VisualEffect::tTransitionType::Unknown1);
+			ghost->Stop(cISC4VisualEffect::tTransitionType::Hard);
 			ghost->Release();
 		}
 		ghost = nullptr;
@@ -66,8 +64,8 @@ namespace
 
 		std::string name(tool->previewNameBegin, tool->previewNameEnd);
 		if ((*sppEffectsManager)->CreateVisualEffect(name.c_str(), &ghost)) {
-			ghost->SetFloatParams(particleAlphaScaleParam, &ghostAlphaScale, 1);
-			ghost->Start(cISC4VisualEffect::tTransitionType::Unknown1);
+			ghost->SetFloatParams(cISC4VisualEffect::tParamType::Alpha, &ghostAlphaScale, 1);
+			ghost->Start(cISC4VisualEffect::tTransitionType::Hard);
 		}
 	}
 
@@ -100,7 +98,7 @@ namespace
 		if (ghostModels.empty()) {
 			ghostModels = getModelParticles(ghost);
 			for (auto particles : ghostModels) {
-				SC4DrawAttributes attributes = GetDrawAttributes(particles->modelInstance);
+				SC4DrawAttributes attributes = particles->modelInstance->GetDrawAttributes();
 				attributes.flags |= SC4DrawAttributes::kDepthGreaterNoWrite;  // kept by the particle renderer
 				particles->modelInstance->SetDrawAttributes(attributes);
 			}

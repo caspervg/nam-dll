@@ -5,46 +5,8 @@
 #include "cIS3DModelInstance.h"
 #include "cISC4VisualEffect.h"
 #include "cS3DCamera.h"
+#include "cS3DTransform.h"
 #include "cS3DVector3.h"
-
-class cS3DTransform
-{
-	public:
-		uint8_t RESERVED[1];
-		uint8_t flags;  // 0 if identity, in which case the translation is unused
-		uint8_t RESERVED[0x26];  // probably the rotation and scale
-		cS3DVector3 translation;
-		uint8_t RESERVED[0x4];
-};
-static_assert(offsetof(cS3DTransform, flags) == 0x1);
-static_assert(offsetof(cS3DTransform, translation) == 0x28);
-static_assert(sizeof(cS3DTransform) == 0x38);
-
-class SC4DrawAttributes
-{
-	public:
-		enum Flags : uint8_t {
-			kApplyAlpha = 0x02,
-			kSelfLit = 0x04,
-			kNoDepth = 0x10,  // no depth test or write
-			kDepthGreaterNoWrite = 0x20,  // only draws where something else is in front
-		};
-
-		uint8_t flags;
-		uint8_t RESERVED[3];
-		float color[3];
-		float alpha;
-};
-static_assert(sizeof(SC4DrawAttributes) == 0x14);
-
-// gzcom-dll declares this without arguments, but the game returns the attributes through a hidden out-pointer
-inline SC4DrawAttributes GetDrawAttributes(cIS3DModelInstance* modelInstance)
-{
-	typedef SC4DrawAttributes* (__thiscall* pfn_GetDrawAttributes)(cIS3DModelInstance* pThis, SC4DrawAttributes* out);
-	auto getDrawAttributes = reinterpret_cast<pfn_GetDrawAttributes>((*reinterpret_cast<void***>(modelInstance))[0x3c / 4]);
-	SC4DrawAttributes attributes = {};
-	return *getDrawAttributes(modelInstance, &attributes);
-}
 
 // position is the translation of the camera transform at +0x28, vPos (+0x160) is the look-at target
 inline cS3DVector3 GetCameraPosition(cS3DCamera* camera)
