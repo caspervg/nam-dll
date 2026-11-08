@@ -11,6 +11,7 @@
 #include "GZServPtrs.h"
 #include "wil/result_macros.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <set>
@@ -240,12 +241,52 @@ namespace
 		cISC4VisualEffect* visible = nullptr;
 		cISC4VisualEffect* hidden = nullptr;
 		bool started = false;
-		bool hiddenDepthSet = false;
+		std::vector<cSC4ModelBasedParticlesEffect*> models;  // of both copies, once the particles exist
+		std::array<float, 3> color;
 	};
 
 	std::vector<WireframeEffect> lineEffects;
 	std::vector<WireframeEffect> dashEffects;
 	bool effectsMissing = false;
+
+	// The color parameter of an effect does not reach model particles, so the particles are colored while they are drawn.
+	std::unordered_map<cSC4ModelBasedParticlesEffect*, std::array<float, 3>> modelColors;
+	bool modelsPending = false;
+
+	// finds the particles of a started effect, which may only exist after a frame
+	bool findModels(WireframeEffect& effect)
+	{
+		if (effect.models.empty()) {
+			auto visibleModels = GetModelParticles(effect.visible);
+			auto hiddenModels = GetModelParticles(effect.hidden);
+			if (visibleModels.empty() || hiddenModels.empty()) {
+				return false;
+			}
+			for (auto particles : hiddenModels) {
+				SC4DrawAttributes attributes = particles->modelInstance->GetDrawAttributes();
+				attributes.flags |= SC4DrawAttributes::kDepthGreaterNoWrite;
+				particles->modelInstance->SetDrawAttributes(attributes);
+			}
+			effect.models = visibleModels;
+			effect.models.insert(effect.models.end(), hiddenModels.begin(), hiddenModels.end());
+		}
+		for (auto particles : effect.models) {
+			modelColors[particles] = effect.color;
+		}
+		return true;
+	}
+
+	void findPendingModels()
+	{
+		modelsPending = false;
+		for (auto effects : {&lineEffects, &dashEffects}) {
+			for (auto& effect : *effects) {
+				if (effect.started && effect.models.empty() && !findModels(effect)) {
+					modelsPending = true;
+				}
+			}
+		}
+	}
 
 	cISC4VisualEffect* createEffect(const char* name)
 	{
@@ -271,26 +312,19 @@ namespace
 				continue;
 			}
 			const uint8_t* color = items[i].heightChange < 0 ? cutColor : fillColor;
-			float rgb[3] = {color[0] / 255.0f, color[1] / 255.0f, color[2] / 255.0f};
+			effect.color = {color[0] / 255.0f, color[1] / 255.0f, color[2] / 255.0f};
 			float visibleAlpha = opacity * opacityFor(items[i].heightChange);
 			float hiddenAlpha = visibleAlpha * hiddenOpacity;
 			for (auto [instance, alpha] : {std::pair{effect.visible, visibleAlpha}, std::pair{effect.hidden, hiddenAlpha}}) {
 				instance->SetEffectTransform(items[i].transform);
-				instance->SetFloatParams(cISC4VisualEffect::tParamType::Color, rgb, 3);
 				instance->SetFloatParams(cISC4VisualEffect::tParamType::Alpha, &alpha, 1);
 				if (!effect.started) {
 					instance->Start(cISC4VisualEffect::tTransitionType::Hard);
 				}
 			}
 			effect.started = true;
-			if (!effect.hiddenDepthSet) {
-				auto models = GetModelParticles(effect.hidden);
-				for (auto particles : models) {
-					SC4DrawAttributes attributes = particles->modelInstance->GetDrawAttributes();
-					attributes.flags |= SC4DrawAttributes::kDepthGreaterNoWrite;
-					particles->modelInstance->SetDrawAttributes(attributes);
-				}
-				effect.hiddenDepthSet = !models.empty();
+			if (!findModels(effect)) {
+				modelsPending = true;
 			}
 		}
 		for (size_t i = items.size(); i < effects.size(); i++) {
@@ -299,7 +333,10 @@ namespace
 				effect.visible->Stop(cISC4VisualEffect::tTransitionType::Hard);
 				effect.hidden->Stop(cISC4VisualEffect::tTransitionType::Hard);
 				effect.started = false;
-				effect.hiddenDepthSet = false;  // set again once the particles are back
+				for (auto particles : effect.models) {
+					modelColors.erase(particles);
+				}
+				effect.models.clear();  // found again once the particles are back
 			}
 		}
 	}
@@ -307,6 +344,9 @@ namespace
 	void releaseEffects(std::vector<WireframeEffect>& effects)
 	{
 		for (auto& effect : effects) {
+			for (auto particles : effect.models) {
+				modelColors.erase(particles);
+			}
 			for (auto instance : {effect.visible, effect.hidden}) {
 				if (instance != nullptr) {
 					instance->Stop(cISC4VisualEffect::tTransitionType::Hard);
@@ -536,6 +576,20 @@ void TerrainPreview::Shutdown()
 	Clear();
 	releaseEffects(lineEffects);
 	releaseEffects(dashEffects);
+}
+
+bool TerrainPreview::GetWireframeColor(cSC4ModelBasedParticlesEffect* particles, float (&color)[3])
+{
+	auto search = modelColors.find(particles);
+	if (search == modelColors.end() && modelsPending) {
+		findPendingModels();
+		search = modelColors.find(particles);
+	}
+	if (search == modelColors.end()) {
+		return false;
+	}
+	std::copy(search->second.begin(), search->second.end(), color);
+	return true;
 }
 
 float TerrainPreview::GetHeightChange(float x, float z)

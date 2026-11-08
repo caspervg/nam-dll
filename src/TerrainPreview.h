@@ -1,5 +1,7 @@
 #pragma once
 
+class cSC4ModelBasedParticlesEffect;
+
 // While hovering a puzzle piece, the intersection tool already solves the terrain heights of a placement without committing them.
 // This shows that solution either as a wireframe over the actual terrain, or by copying it into the vertices drawn by the terrain view.
 // The terrain itself is not modified, so nothing in the city reacts to it.
@@ -17,6 +19,9 @@ namespace TerrainPreview
 
 	// also releases the wireframe effects, when the tool goes away
 	void Shutdown();
+
+	// color of a wireframe particle effect, false for any other one
+	bool GetWireframeColor(cSC4ModelBasedParticlesEffect* particles, float (&color)[3]);
 
 	// height difference between the previewed and the actual terrain at a world position
 	float GetHeightChange(float x, float z);
