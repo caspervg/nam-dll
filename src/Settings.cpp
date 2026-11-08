@@ -23,9 +23,9 @@ Settings::Settings() :
 	ghostPreviewColor{140, 204, 255},
 	ghostPreviewAlphaScale(0.75f),
 	ghostPreviewDepthTolerance(1.0f),
-	ghostPreviewGradingOpacity(0.15f),
-	ghostPreviewCutColor{255, 70, 50},
-	ghostPreviewFillColor{80, 220, 80},
+	ghostPreviewGradingOpacity(0.4f),
+	ghostPreviewCutColor{239, 28, 36},  // NAM hole digger red
+	ghostPreviewFillColor{63, 73, 206},  // NAM raiser blue
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
