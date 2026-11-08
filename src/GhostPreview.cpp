@@ -128,21 +128,37 @@ namespace
 		return std::find(list.begin(), list.end(), particles) != list.end();
 	}
 
+	// the particles are re-emitted all the time, so their color is set every frame
+	void setColor(cSC4ModelBasedParticlesEffect* particles, const float* color)
+	{
+		for (auto node = particles->particles->next; node != particles->particles; node = node->next) {
+			std::copy(color, color + 3, node->particle->colorFactor);
+		}
+	}
+
 	void __fastcall Hook_RenderActiveParticles(cSC4ModelBasedParticlesEffect* pThis, void*, SC4DrawContext* drawContext)
 	{
 		if (contains(ghostModels, pThis)) {
 			return;  // drawn together with the preview
 		}
+		float wireframeColor[3];
+		bool isWireframe = TerrainPreview::GetWireframeColor(pThis, wireframeColor);
+		if (isWireframe && !sourceModels.empty()) {
+			return;  // drawn before the preview, so that the preview covers it and its hidden copy only shows behind terrain
+		}
 		if (!contains(sourceModels, pThis)) {
-			float color[3];
-			if (TerrainPreview::GetWireframeColor(pThis, color)) {
-				// the particles are re-emitted all the time, so their color is set every frame
-				for (auto node = pThis->particles->next; node != pThis->particles; node = node->next) {
-					std::copy(std::begin(color), std::end(color), node->particle->colorFactor);
-				}
+			if (isWireframe) {
+				setColor(pThis, wireframeColor);
 			}
 			RenderActiveParticles(pThis, drawContext);
 			return;
+		}
+
+		if (pThis == sourceModels.front()) {
+			for (auto& [particles, color] : TerrainPreview::GetWireframeModels()) {
+				setColor(particles, color.data());
+				RenderActiveParticles(particles, drawContext);
+			}
 		}
 
 		// keep the preview's own color in the tint, so the ghost of a _red preview stays red
@@ -161,10 +177,7 @@ namespace
 			shift.fY += TerrainPreview::GetHeightChange(pThis->transform.translation.fX, pThis->transform.translation.fZ);
 		}
 		for (auto particles : ghostModels) {
-			// the particles are re-emitted all the time, so their color is set every frame
-			for (auto node = particles->particles->next; node != particles->particles; node = node->next) {
-				std::copy(std::begin(tint), std::end(tint), node->particle->colorFactor);
-			}
+			setColor(particles, tint);
 			renderShifted(particles, drawContext, shift);
 		}
 		renderShifted(pThis, drawContext, shift);

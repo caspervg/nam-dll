@@ -592,6 +592,14 @@ bool TerrainPreview::GetWireframeColor(cSC4ModelBasedParticlesEffect* particles,
 	return true;
 }
 
+const std::unordered_map<cSC4ModelBasedParticlesEffect*, std::array<float, 3>>& TerrainPreview::GetWireframeModels()
+{
+	if (modelsPending) {
+		findPendingModels();
+	}
+	return modelColors;
+}
+
 float TerrainPreview::GetHeightChange(float x, float z)
 {
 	if (applied.empty() || x < 0 || z < 0) {
