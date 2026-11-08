@@ -30,6 +30,7 @@ public:
 	bool enableGhostPreviewPatch;
 	bool ghostPreviewOverlay;
 	bool ghostPreviewGrading;
+	bool ghostPreviewWireframe;
 	int ghostPreviewColor[3];
 	float ghostPreviewAlphaScale;
 	float ghostPreviewDepthTolerance;

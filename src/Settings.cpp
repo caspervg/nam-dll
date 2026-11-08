@@ -102,6 +102,7 @@ Settings::Settings() :
 	enableGhostPreviewPatch(true),
 	ghostPreviewOverlay(true),
 	ghostPreviewGrading(false),
+	ghostPreviewWireframe(true),
 	ghostPreviewColor{140, 204, 255},
 	ghostPreviewAlphaScale(0.75f),
 	ghostPreviewDepthTolerance(1.0f),
@@ -174,6 +175,9 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			if (const std::string& mode = ini.get("NAM").get("GhostPreviewMode"); !mode.empty()) {
 				ghostPreviewOverlay = mode == "overlay" || mode == "both";
 				ghostPreviewGrading = mode == "grading" || mode == "both";
+			}
+			if (const std::string& style = ini.get("NAM").get("GhostPreviewGradingStyle"); !style.empty()) {
+				ghostPreviewWireframe = style != "terrain";
 			}
 			readColorProp("GhostPreviewColor", ghostPreviewColor);
 			readFloatProp("GhostPreviewAlphaScale", ghostPreviewAlphaScale);
