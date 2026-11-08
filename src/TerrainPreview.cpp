@@ -91,15 +91,15 @@ namespace
 	bool combinerSourceReplaced = false;
 	uint8_t cutColor[3];
 	uint8_t fillColor[3];
-	constexpr float fullOpacityHeightChange = 6.0f;
-	constexpr float minOpacityFactor = 0.45f;
+	constexpr float fullOpacityHeightChange = 16.0f;
+	constexpr float minOpacityFactor = 0.15f;
 	float outlineOpacity;
 
 	// the combine mode of the outlines halves their alpha, so this is twice the configured opacity
 	float opacityFor(float heightChange)
 	{
-		// the square root makes small changes stand out, as most grading only moves the terrain by a few meters
-		float strength = std::sqrt((std::min)(std::abs(heightChange) / fullOpacityHeightChange, 1.0f));
+		// logarithmic, so that each doubling of the change is an equal step, from small adjustments up to deep cuts
+		float strength = (std::min)(std::log1p(std::abs(heightChange)) / std::log1p(fullOpacityHeightChange), 1.0f);
 		float opacity = outlineOpacity * (minOpacityFactor + (1 - minOpacityFactor) * strength);
 		return (std::min)(opacity * 2, 1.0f);
 	}
