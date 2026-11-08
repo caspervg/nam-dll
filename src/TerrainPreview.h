@@ -1,4 +1,6 @@
 #pragma once
+#include <array>
+#include <unordered_map>
 
 class cSC4ModelBasedParticlesEffect;
 
@@ -22,6 +24,9 @@ namespace TerrainPreview
 
 	// color of a wireframe particle effect, false for any other one
 	bool GetWireframeColor(cSC4ModelBasedParticlesEffect* particles, float (&color)[3]);
+
+	// all wireframe particle effects and their colors
+	const std::unordered_map<cSC4ModelBasedParticlesEffect*, std::array<float, 3>>& GetWireframeModels();
 
 	// height difference between the previewed and the actual terrain at a world position
 	float GetHeightChange(float x, float z);
