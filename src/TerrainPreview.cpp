@@ -94,6 +94,7 @@ namespace
 	constexpr float fullOpacityHeightChange = 16.0f;
 	constexpr float minOpacityFactor = 0.15f;
 	float outlineOpacity;
+	float groundOutlineOpacity = 1.0f;  // the outlines on the actual terrain are fainter next to the wireframe
 
 	// the combine mode of the outlines halves their alpha, so this is twice the configured opacity
 	float opacityFor(float heightChange)
@@ -175,7 +176,7 @@ namespace
 			}
 
 			const uint8_t* color = cut ? cutColor : fillColor;
-			uint32_t rgba = color[0] << 24 | color[1] << 16 | color[2] << 8 | static_cast<uint8_t>(opacityFor(change) * 255);
+			uint32_t rgba = color[0] << 24 | color[1] << 16 | color[2] << 8 | static_cast<uint8_t>(groundOutlineOpacity * opacityFor(change) * 255);
 			SC4Point<int> point = {x, z};
 			cGZPersistResourceKey texture(outlineTextureType, outlineTextureGroup, sides);
 			pView->MarkSelected(point, texture, 0, false, rgba, combineModeModulate, false);
@@ -228,7 +229,7 @@ namespace
 	constexpr float dashLength = 0.8f;
 	constexpr float dashSpacing = 1.6f;
 	constexpr float minDottedLineHeight = 1.0f;
-	constexpr float lineOpacity = 0.6f;  // relative to the outlines, which keeps the lines about as faint as the piece preview
+	constexpr float lineOpacity = 0.6f;  // keeps the lines about as faint as the piece preview
 	constexpr float dottedLineOpacity = 0.4f;
 	constexpr float hiddenOpacity = 0.5f;  // relative to the visible part
 	constexpr float lineLift = 0.1f;  // keeps lines over unchanged terrain from flickering into it
@@ -626,6 +627,7 @@ float TerrainPreview::GetHeightChange(float x, float z)
 void TerrainPreview::Install(float opacity, const int (&cut)[3], const int (&fill)[3], bool wireframe)
 {
 	wireframeEnabled = wireframe;
+	groundOutlineOpacity = wireframe ? 0.6f : 1.0f;
 	outlineOpacity = std::clamp(opacity, 0.0f, 1.0f);
 	std::copy(std::begin(cut), std::end(cut), cutColor);
 	std::copy(std::begin(fill), std::end(fill), fillColor);
