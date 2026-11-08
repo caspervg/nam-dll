@@ -228,7 +228,8 @@ namespace
 	constexpr float dashLength = 0.8f;
 	constexpr float dashSpacing = 1.6f;
 	constexpr float minDottedLineHeight = 1.0f;
-	constexpr float dottedLineOpacity = 0.6f;  // relative to the lines, so that the graded terrain stands out
+	constexpr float lineOpacity = 0.6f;  // relative to the outlines, which keeps the lines about as faint as the piece preview
+	constexpr float dottedLineOpacity = 0.4f;
 	constexpr float hiddenOpacity = 0.5f;  // relative to the visible part
 	constexpr float lineLift = 0.1f;  // keeps lines over unchanged terrain from flickering into it
 
@@ -444,7 +445,7 @@ namespace
 				}
 			}
 		}
-		showItems(lineEffects, lineEffectName, lines, 1.0f);
+		showItems(lineEffects, lineEffectName, lines, lineOpacity);
 		showItems(dashEffects, dashEffectName, dashes, dottedLineOpacity);
 	}
 
