@@ -2,7 +2,6 @@
 #include "Patching.h"
 #include "TerrainPreview.h"
 #include "EffectStubs.h"
-#include "cISC4EffectsManager.h"
 #include "wil/result_macros.h"
 #include <algorithm>
 #include <string>
@@ -14,8 +13,6 @@
 // With grading, the terrain is drawn as it will be after placement, and the preview is moved onto it.
 namespace
 {
-	cISC4EffectsManager** const sppEffectsManager = reinterpret_cast<cISC4EffectsManager**>(0xb43d1c);
-
 	bool overlayEnabled;
 	bool gradingEnabled;
 	float ghostColor[3];
@@ -29,19 +26,6 @@ namespace
 	std::vector<cSC4ModelBasedParticlesEffect*> sourceModels;
 
 	cSC4ModelBasedParticlesEffect::pfn_RenderActiveParticles RenderActiveParticles = nullptr;
-
-	std::vector<cSC4ModelBasedParticlesEffect*> getModelParticles(cISC4VisualEffect* effect)
-	{
-		std::vector<cSC4ModelBasedParticlesEffect*> result;
-		auto visualEffect = reinterpret_cast<cSC4VisualEffect*>(effect);
-		for (auto rec = visualEffect->componentsBegin; rec != nullptr && rec < visualEffect->componentsEnd; rec++) {
-			auto particles = reinterpret_cast<cSC4ModelBasedParticlesEffect*>(rec->component);
-			if (particles != nullptr && reinterpret_cast<uint32_t>(particles->vtable) == cSC4ModelBasedParticlesEffect::kVTable && particles->modelInstance != nullptr) {
-				result.push_back(particles);
-			}
-		}
-		return result;
-	}
 
 	void destroyGhost()
 	{
@@ -85,7 +69,7 @@ namespace
 		}
 		// the particle models only exist once the effects have been started
 		if (sourceModels.empty()) {
-			sourceModels = getModelParticles(ghostSource);
+			sourceModels = GetModelParticles(ghostSource);
 		}
 		if (ghost == nullptr) {
 			return;
@@ -96,7 +80,7 @@ namespace
 		ghost->SetEffectTransform(transform);
 
 		if (ghostModels.empty()) {
-			ghostModels = getModelParticles(ghost);
+			ghostModels = GetModelParticles(ghost);
 			for (auto particles : ghostModels) {
 				SC4DrawAttributes attributes = particles->modelInstance->GetDrawAttributes();
 				attributes.flags |= SC4DrawAttributes::kDepthGreaterNoWrite;  // kept by the particle renderer
@@ -243,7 +227,7 @@ namespace
 	{
 		if (pThis == ghostTool) {
 			destroyGhost();
-			TerrainPreview::Clear();
+			TerrainPreview::Shutdown();
 		}
 		return DeletingDtor(pThis, flags);
 	}
@@ -293,7 +277,7 @@ void GhostPreview::Install(const Settings& settings)
 		THROW_HR_IF(E_FAIL, *reinterpret_cast<uint32_t*>(vtableHook.slotAddress) != vtableHook.expected);
 	}
 	if (gradingEnabled) {
-		TerrainPreview::Install(settings.ghostPreviewGradingOpacity, settings.ghostPreviewCutColor, settings.ghostPreviewFillColor);
+		TerrainPreview::Install(settings.ghostPreviewGradingOpacity, settings.ghostPreviewCutColor, settings.ghostPreviewFillColor, settings.ghostPreviewWireframe);
 	}
 	for (auto& vtableHook : vtableHooks) {
 		*vtableHook.original = reinterpret_cast<void*>(Patching::PatchVTableSlot(vtableHook.slotAddress, vtableHook.expected, vtableHook.hook));

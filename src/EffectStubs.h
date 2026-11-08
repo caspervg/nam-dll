@@ -3,10 +3,14 @@
 #include <cstdint>
 #include "NetworkStubs.h"
 #include "cIS3DModelInstance.h"
+#include "cISC4EffectsManager.h"
 #include "cISC4VisualEffect.h"
 #include "cS3DCamera.h"
 #include "cS3DTransform.h"
 #include "cS3DVector3.h"
+#include <vector>
+
+inline cISC4EffectsManager** const sppEffectsManager = reinterpret_cast<cISC4EffectsManager**>(0xb43d1c);
 
 // position is the translation of the camera transform at +0x28, vPos (+0x160) is the look-at target
 inline cS3DVector3 GetCameraPosition(cS3DCamera* camera)
@@ -111,3 +115,17 @@ static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, intRule) == 0x48);
 static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, placementCost) == 0x58);
 static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, previewNameBegin) == 0x78);
 static_assert(offsetof(cSC4ViewInputControlNetworkIntxTool, isPlacementValid) == 0x88);
+
+// the model particle components of an effect, which only exist once the effect has been started
+inline std::vector<cSC4ModelBasedParticlesEffect*> GetModelParticles(cISC4VisualEffect* effect)
+{
+	std::vector<cSC4ModelBasedParticlesEffect*> result;
+	auto visualEffect = reinterpret_cast<cSC4VisualEffect*>(effect);
+	for (auto rec = visualEffect->componentsBegin; rec != nullptr && rec < visualEffect->componentsEnd; rec++) {
+		auto particles = reinterpret_cast<cSC4ModelBasedParticlesEffect*>(rec->component);
+		if (particles != nullptr && reinterpret_cast<uint32_t>(particles->vtable) == cSC4ModelBasedParticlesEffect::kVTable && particles->modelInstance != nullptr) {
+			result.push_back(particles);
+		}
+	}
+	return result;
+}
