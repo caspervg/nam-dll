@@ -134,6 +134,13 @@ namespace
 			return;  // drawn together with the preview
 		}
 		if (!contains(sourceModels, pThis)) {
+			float color[3];
+			if (TerrainPreview::GetWireframeColor(pThis, color)) {
+				// the particles are re-emitted all the time, so their color is set every frame
+				for (auto node = pThis->particles->next; node != pThis->particles; node = node->next) {
+					std::copy(std::begin(color), std::end(color), node->particle->colorFactor);
+				}
+			}
 			RenderActiveParticles(pThis, drawContext);
 			return;
 		}
