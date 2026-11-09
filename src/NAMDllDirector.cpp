@@ -47,6 +47,7 @@
 #include "wil/win32_helpers.h"
 #include "Patching.h"
 #include "Rul2Engine.h"
+#include "DirectDrag.h"
 #include "NetworkSlopes.h"
 #include "FlexPieces.h"
 #include "CommuteLoop.h"
@@ -191,6 +192,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableTunnels, "Tunnels patch for RHW, Street and Lightrail", InstallTunnelsPatch);
 		InstallWhen(settings.reduceFerryBridgeHeightPatch, "Ferry Bridge Height patch", InstallFerryBridgeHeightPatch);
 		InstallWhen(settings.enableRUL2EnginePatch, "RUL2 Engine patch", Rul2Engine::Install);
+		InstallWhen(settings.enableRUL2EnginePatch, "Direct Drag patch for override networks", DirectDrag::Install);
 		InstallWhen(settings.enableNetworkSlopePatch, "Network Slopes patch", NetworkSlopes::Install);
 		InstallWhen(settings.enableFlexPuzzlePiecePatch, "FLEX Puzzle Piece RUL0 patch", FlexPieces::Install);
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
@@ -410,7 +412,10 @@ public:
 		if (gameVersion == 641)
 		{
 			InstallNamPatches(settings);
-			Rul2Engine::SetDirectDragTile(settings.directDragTile);
+			if (settings.directDragTile != 0) {
+				const DirectDrag::Row row = {settings.directDragTile, 0, 0};
+				DirectDrag::SetRows(&row, 1);
+			}
 
 			cIGZFrameWork* const pFramework = RZGetFrameWork();
 			if (pFramework->GetState() < cIGZFrameWork::kStatePreAppInit)

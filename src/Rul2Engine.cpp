@@ -239,7 +239,9 @@ namespace
 		return NoMatch;
 	}
 
-	uint32_t sDirectDragTile = 0;  // orthogonal straight tile of the override network to drag directly, 0 = off
+	// The tile that seeds the drag being solved, 0 = none, and its orientation in the frame where the drag heads south.
+	uint32_t sDirectDragTile = 0;
+	RotFlip sDirectDragRotFlip = R0F0;
 
 	// Direct drag: pretend a tile of the override network lies right behind a dragged cell, as a starter piece would,
 	// and let the regular override rules convert that cell. The main loop then propagates it along the drag.
@@ -263,8 +265,8 @@ namespace
 				const int32_t dx = (point + 1)->x - point->x;
 				const int32_t dz = (point + 1)->y - point->y;
 				const int8_t dir = dx > 0 ? 2 : dx < 0 ? 0 : dz > 0 ? 3 : 1;  // where the cell lies as seen from the virtual tile
-				const uint8_t heading = (dx != 0 ? 1 : 0) | ((dx < 0 || dz < 0) ? 2 : 0);
-				cSC4NetworkTool::tSolvedCell virtualTile = {sDirectDragTile, static_cast<RotFlip>(heading ^ variant), 0};
+				const uint32_t heading = (dx != 0 ? 1 : 0) | ((dx < 0 || dz < 0) ? 2 : 0);  // quarter turns from south
+				cSC4NetworkTool::tSolvedCell virtualTile = {sDirectDragTile, static_cast<RotFlip>(rotate(sDirectDragRotFlip, heading) ^ variant), 0};
 				if (PatchTilePair2(virtualTile, *cell, dir) == Matched) {
 					return;
 				}
@@ -430,14 +432,8 @@ void Rul2Engine::Install()
 	Patching::InstallHook(AddRuleOverrides_InjectPoint, Hook_AddRuleOverrides);
 }
 
-void Rul2Engine::SetDirectDragTile(uint32_t tileId)
+void Rul2Engine::SetDirectDragSeed(uint32_t tileId, RotFlip rotFlip)
 {
 	sDirectDragTile = tileId;
-}
-
-// For other DLLs, for example a menu of override networks. They find it with
-// GetProcAddress(GetModuleHandle("NAM.dll"), "NamSetDirectDragTile").
-extern "C" __declspec(dllexport) void __cdecl NamSetDirectDragTile(uint32_t tileId)
-{
-	Rul2Engine::SetDirectDragTile(tileId);
+	sDirectDragRotFlip = rotFlip;
 }
