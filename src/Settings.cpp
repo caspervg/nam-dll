@@ -17,6 +17,7 @@ Settings::Settings() :
 	enableDualNetworkTransitPatch(false),
 	enableTransportMenuPatch(true),
 	enableKeyboardShortcuts(true),
+	directDragLog(false),
 	directDragTile(0) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -42,6 +43,7 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableVerticalPathSeparationPatch", enableVerticalPathSeparationPatch);
 			readBoolProp("EnableDualNetworkTransitPatch", enableDualNetworkTransitPatch);
 			readBoolProp("EnableTransportMenuPatch", enableTransportMenuPatch);
+			readBoolProp("DirectDragLog", directDragLog);
 			directDragTile = std::strtoul(ini.get("NAM").get("DirectDragTile").c_str(), nullptr, 16);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");

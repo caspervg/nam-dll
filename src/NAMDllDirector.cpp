@@ -412,6 +412,7 @@ public:
 		if (gameVersion == 641)
 		{
 			InstallNamPatches(settings);
+			DirectDrag::SetLogging(settings.directDragLog);
 			if (settings.directDragTile != 0) {
 				const DirectDrag::Row row = {settings.directDragTile, 0, 0};
 				DirectDrag::SetRows(&row, 1);

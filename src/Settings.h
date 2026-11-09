@@ -21,5 +21,6 @@ public:
 	bool enableDualNetworkTransitPatch;
 	bool enableTransportMenuPatch;
 	bool enableKeyboardShortcuts;
+	bool directDragLog;
 	uint32_t directDragTile;  // orthogonal straight tile of the override network to drag directly, 0 = off
 };

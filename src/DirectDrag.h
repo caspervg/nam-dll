@@ -18,4 +18,7 @@ namespace DirectDrag
 
 	// Sets the network that drags produce from now on. No rows turns direct dragging off.
 	void SetRows(const Row* rows, uint32_t count);
+
+	// Diagnostics (DirectDragLog in NAM.ini): logs every committed drag, direct or not.
+	void SetLogging(bool enabled);
 }

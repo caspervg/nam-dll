@@ -33,6 +33,7 @@ namespace
 
 	std::vector<DirectDrag::Row> sRows;  // the row that follows the cursor comes first
 	bool sKeepPreviews = false;          // rows after the first of a drag: the previews of the earlier rows stay
+	bool sLogging = false;
 
 	void __fastcall Hook_ClearCellPreviews(cSC4NetworkTool* pThis, void* edx)
 	{
@@ -50,6 +51,7 @@ namespace
 
 	void __fastcall Hook_PlaceAllSegments(cSC4NetworkTool* pThis, void* edx, uint8_t commit, uint8_t straightOnly, uint8_t unknown, uint32_t networkType)
 	{
+		Rul2Engine::SetDragLog(sLogging && commit != 0);
 		if (sRows.empty()) {
 			return PlaceAllSegments(pThis, commit, straightOnly, unknown, networkType);
 		}
@@ -92,6 +94,11 @@ void DirectDrag::SetRows(const Row* rows, uint32_t count)
 {
 	sRows.assign(rows, rows + (rows != nullptr ? count : 0));
 	std::stable_partition(sRows.begin(), sRows.end(), [](const Row& row) { return row.offset == 0; });
+}
+
+void DirectDrag::SetLogging(bool enabled)
+{
+	sLogging = enabled;
 }
 
 void DirectDrag::Install()
