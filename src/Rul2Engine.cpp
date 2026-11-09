@@ -250,19 +250,24 @@ namespace
 		if (sDirectDragTile == 0 || dragged.size() < 2) {  // FLEX pieces simulate a drag of one cell
 			return;
 		}
-		for (auto point = dragged.begin(); point + 1 != dragged.end(); point++) {
-			const uint32_t xz = (point->y << 16) | point->x;
-			auto cell = std::find_if(cellsBuffer.begin(), cellsBuffer.end(), [xz](const cSC4NetworkTool::tSolvedCell& c) { return c.xz == xz; });
-			if (cell == cellsBuffer.end()) {
-				continue;
-			}
-			const int32_t dx = (point + 1)->x - point->x;
-			const int32_t dz = (point + 1)->y - point->y;
-			const int8_t dir = dx > 0 ? 2 : dx < 0 ? 0 : dz > 0 ? 3 : 1;  // where the cell lies as seen from the virtual tile
-			const RotFlip rf = static_cast<RotFlip>((dx != 0 ? 1 : 0) | ((dx < 0 || dz < 0) ? 2 : 0));  // heading along the drag
-			cSC4NetworkTool::tSolvedCell virtualTile = {sDirectDragTile, rf, 0};
-			if (PatchTilePair2(virtualTile, *cell, dir) == Matched) {
-				return;
+		// The virtual tile first heads along the drag, which gives networks with a direction of travel that direction.
+		// Networks without one often only have rules for some orientations (a starter piece can then only be dragged
+		// out of one side), so the other orientations along the same axis are tried next.
+		for (const uint8_t variant : {0x00, 0x02, 0x80, 0x82}) {
+			for (auto point = dragged.begin(); point + 1 != dragged.end(); point++) {
+				const uint32_t xz = (point->y << 16) | point->x;
+				auto cell = std::find_if(cellsBuffer.begin(), cellsBuffer.end(), [xz](const cSC4NetworkTool::tSolvedCell& c) { return c.xz == xz; });
+				if (cell == cellsBuffer.end()) {
+					continue;
+				}
+				const int32_t dx = (point + 1)->x - point->x;
+				const int32_t dz = (point + 1)->y - point->y;
+				const int8_t dir = dx > 0 ? 2 : dx < 0 ? 0 : dz > 0 ? 3 : 1;  // where the cell lies as seen from the virtual tile
+				const uint8_t heading = (dx != 0 ? 1 : 0) | ((dx < 0 || dz < 0) ? 2 : 0);
+				cSC4NetworkTool::tSolvedCell virtualTile = {sDirectDragTile, static_cast<RotFlip>(heading ^ variant), 0};
+				if (PatchTilePair2(virtualTile, *cell, dir) == Matched) {
+					return;
+				}
 			}
 		}
 	}
