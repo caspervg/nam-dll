@@ -265,7 +265,8 @@ namespace
 				const int32_t dx = (point + 1)->x - point->x;
 				const int32_t dz = (point + 1)->y - point->y;
 				const int8_t dir = dx > 0 ? 2 : dx < 0 ? 0 : dz > 0 ? 3 : 1;  // where the cell lies as seen from the virtual tile
-				const uint32_t heading = (dx != 0 ? 1 : 0) | ((dx < 0 || dz < 0) ? 2 : 0);  // quarter turns from south
+				// Quarter turns from south. Rotations count clockwise: south, west, north, east.
+				const uint32_t heading = dz > 0 ? 0 : dx < 0 ? 1 : dz < 0 ? 2 : 3;
 				cSC4NetworkTool::tSolvedCell virtualTile = {sDirectDragTile, static_cast<RotFlip>(rotate(sDirectDragRotFlip, heading) ^ variant), 0};
 				if (PatchTilePair2(virtualTile, *cell, dir) == Matched) {
 					return;
