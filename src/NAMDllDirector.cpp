@@ -410,6 +410,7 @@ public:
 		if (gameVersion == 641)
 		{
 			InstallNamPatches(settings);
+			Rul2Engine::SetDirectDragTile(settings.directDragTile);
 
 			cIGZFrameWork* const pFramework = RZGetFrameWork();
 			if (pFramework->GetState() < cIGZFrameWork::kStatePreAppInit)

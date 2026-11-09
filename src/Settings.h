@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <cstdint>
 
 class Settings final
 {
@@ -20,4 +21,5 @@ public:
 	bool enableDualNetworkTransitPatch;
 	bool enableTransportMenuPatch;
 	bool enableKeyboardShortcuts;
+	uint32_t directDragTile;  // orthogonal straight tile of the override network to drag directly, 0 = off
 };
