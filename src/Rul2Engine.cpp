@@ -268,8 +268,14 @@ namespace
 				// Quarter turns from south. Rotations count clockwise: south, west, north, east.
 				const uint32_t heading = dz > 0 ? 0 : dx < 0 ? 1 : dz < 0 ? 2 : 3;
 				cSC4NetworkTool::tSolvedCell virtualTile = {sDirectDragTile, static_cast<RotFlip>(rotate(sDirectDragRotFlip, heading) ^ variant), 0};
+				const cSC4NetworkTool::tSolvedCell plainCell = *cell;
 				if (PatchTilePair2(virtualTile, *cell, dir) == Matched) {
-					return;
+					if (cell->id == sDirectDragTile) {
+						return;
+					}
+					// The rules made something else of this cell, for example the end stub of the network out of the
+					// end stub of the drag. Nothing spreads from that, so leave the cell alone and try the next one.
+					*cell = plainCell;
 				}
 			}
 		}
