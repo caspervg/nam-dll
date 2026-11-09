@@ -242,6 +242,7 @@ namespace
 	// The tile that seeds the drag being solved, 0 = none, and its orientation in the frame where the drag heads south.
 	uint32_t sDirectDragTile = 0;
 	RotFlip sDirectDragRotFlip = R0F0;
+	uint32_t sDirectDragStart = 0xFFFFFFFF;  // the cell where the player started the drag, as z << 16 | x
 
 	// Direct drag: pretend a tile of the override network lies right behind a dragged cell, as a starter piece would,
 	// and let the regular override rules convert that cell. The main loop then propagates it along the drag.
@@ -249,8 +250,30 @@ namespace
 	int seedDirectDrag(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
 	{
 		typedef cSC4NetworkTool::tSolvedCell Cell;
-		auto& dragged = networkTool->draggedCells;
-		if (sDirectDragTile == 0 || dragged.size() < 2) {  // FLEX pieces simulate a drag of one cell
+		auto& draggedCells = networkTool->draggedCells;
+		if (sDirectDragTile == 0 || draggedCells.size() < 2) {  // FLEX pieces simulate a drag of one cell
+			return 0;
+		}
+		// The first cells of the drag in the order of the drag. The game does not list them that way: on a diagonal
+		// to the north-west, for example, the two cells of every step are swapped. So walk from the start to the next
+		// cell that touches the last one.
+		std::vector<SC4Point<uint32_t>> dragged;
+		auto start = std::find_if(draggedCells.begin(), draggedCells.end(),
+				[](const SC4Point<uint32_t>& p) { return ((p.y << 16) | p.x) == sDirectDragStart; });
+		dragged.push_back(start != draggedCells.end() ? *start : *draggedCells.begin());
+		while (dragged.size() < 32) {
+			const SC4Point<uint32_t> last = dragged.back();
+			auto next = std::find_if(draggedCells.begin(), draggedCells.end(), [&](const SC4Point<uint32_t>& p) {
+				const int32_t dx = p.x - last.x, dz = p.y - last.y;
+				return dx * dx + dz * dz == 1
+						&& std::none_of(dragged.begin(), dragged.end(), [&p](const SC4Point<uint32_t>& q) { return q.x == p.x && q.y == p.y; });
+			});
+			if (next == draggedCells.end()) {
+				break;
+			}
+			dragged.push_back(*next);
+		}
+		if (dragged.size() < 2) {
 			return 0;
 		}
 		const auto findCell = [&cellsBuffer](const SC4Point<uint32_t>& point) {
@@ -522,8 +545,9 @@ void Rul2Engine::SetDragLog(bool enabled)
 	sDragLog = enabled;
 }
 
-void Rul2Engine::SetDirectDragSeed(uint32_t tileId, RotFlip rotFlip)
+void Rul2Engine::SetDirectDragSeed(uint32_t tileId, RotFlip rotFlip, uint32_t startXz)
 {
 	sDirectDragTile = tileId;
 	sDirectDragRotFlip = rotFlip;
+	sDirectDragStart = startXz;
 }

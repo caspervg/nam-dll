@@ -44,7 +44,10 @@ namespace
 
 	void placeRow(cSC4NetworkTool* pThis, const DirectDrag::Row& row, uint8_t commit, uint8_t straightOnly, uint8_t unknown, uint32_t networkType)
 	{
-		Rul2Engine::SetDirectDragSeed(row.tile, static_cast<RotFlip>(row.rotFlip & 0x83));
+		const AnchorPoints* anchors = reinterpret_cast<AnchorPoints*>(reinterpret_cast<uint8_t*>(pThis) + kAnchorPointsOffset);
+		const bool hasStart = anchors->start != nullptr && anchors->end > anchors->start;
+		Rul2Engine::SetDirectDragSeed(row.tile, static_cast<RotFlip>(row.rotFlip & 0x83),
+				hasStart ? (anchors->start[0].y << 16) | anchors->start[0].x : 0xFFFFFFFF);
 		PlaceAllSegments(pThis, commit, straightOnly, unknown, networkType);
 		Rul2Engine::SetDirectDragSeed(0, R0F0);
 	}
