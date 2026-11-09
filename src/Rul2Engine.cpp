@@ -245,31 +245,42 @@ namespace
 
 	// Direct drag: pretend a tile of the override network lies right behind a dragged cell, as a starter piece would,
 	// and let the regular override rules convert that cell. The main loop then propagates it along the drag.
-	// ponytail: orthogonal starts only, a diagonal start needs the diagonal tile of the network as well.
 	void seedDirectDrag(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
 	{
+		typedef cSC4NetworkTool::tSolvedCell Cell;
 		auto& dragged = networkTool->draggedCells;
 		if (sDirectDragTile == 0 || dragged.size() < 2) {  // FLEX pieces simulate a drag of one cell
 			return;
 		}
+		const auto findCell = [&cellsBuffer](const SC4Point<uint32_t>& point) {
+			const uint32_t xz = (point.y << 16) | point.x;
+			return std::find_if(cellsBuffer.begin(), cellsBuffer.end(), [xz](const Cell& c) { return c.xz == xz; });
+		};
+		// A step of the drag as PatchTilePair2 wants it: where the second cell lies as seen from the first.
+		const auto dirOf = [](const SC4Point<uint32_t>& from, const SC4Point<uint32_t>& to) -> int8_t {
+			const int32_t dx = to.x - from.x, dz = to.y - from.y;
+			return dx > 0 ? 2 : dx < 0 ? 0 : dz > 0 ? 3 : 1;
+		};
+		// The override tile heading along a step. Rotations count clockwise from south: south, west, north, east.
+		const auto virtualTile = [](int8_t dir, uint8_t variant) -> Cell {
+			const uint32_t heading = (dir + 1) & 3;
+			return {sDirectDragTile, static_cast<RotFlip>(rotate(sDirectDragRotFlip, heading) ^ variant), 0};
+		};
+
 		// The virtual tile first heads along the drag, which gives networks with a direction of travel that direction.
 		// Networks without one often only have rules for some orientations (a starter piece can then only be dragged
 		// out of one side), so the other orientations along the same axis are tried next.
-		for (const uint8_t variant : {0x00, 0x02, 0x80, 0x82}) {
+		const uint8_t variants[] = {0x00, 0x02, 0x80, 0x82};
+		for (const uint8_t variant : variants) {
 			for (auto point = dragged.begin(); point + 1 != dragged.end(); point++) {
-				const uint32_t xz = (point->y << 16) | point->x;
-				auto cell = std::find_if(cellsBuffer.begin(), cellsBuffer.end(), [xz](const cSC4NetworkTool::tSolvedCell& c) { return c.xz == xz; });
+				auto cell = findCell(*point);
 				if (cell == cellsBuffer.end()) {
 					continue;
 				}
-				const int32_t dx = (point + 1)->x - point->x;
-				const int32_t dz = (point + 1)->y - point->y;
-				const int8_t dir = dx > 0 ? 2 : dx < 0 ? 0 : dz > 0 ? 3 : 1;  // where the cell lies as seen from the virtual tile
-				// Quarter turns from south. Rotations count clockwise: south, west, north, east.
-				const uint32_t heading = dz > 0 ? 0 : dx < 0 ? 1 : dz < 0 ? 2 : 3;
-				cSC4NetworkTool::tSolvedCell virtualTile = {sDirectDragTile, static_cast<RotFlip>(rotate(sDirectDragRotFlip, heading) ^ variant), 0};
-				const cSC4NetworkTool::tSolvedCell plainCell = *cell;
-				if (PatchTilePair2(virtualTile, *cell, dir) == Matched) {
+				const int8_t dir = dirOf(*point, *(point + 1));
+				Cell virtualStraight = virtualTile(dir, variant);
+				const Cell plainCell = *cell;
+				if (PatchTilePair2(virtualStraight, *cell, dir) == Matched) {
 					if (cell->id == sDirectDragTile) {
 						return;
 					}
@@ -277,6 +288,32 @@ namespace
 					// end stub of the drag. Nothing spreads from that, so leave the cell alone and try the next one.
 					*cell = plainCell;
 				}
+			}
+		}
+
+		// The drag starts on a diagonal, which is a staircase of cells whose steps alternate between two directions.
+		// A straight tile right behind it would make half a curve of the first cell. So pretend the staircase goes on
+		// for one more cell behind the start, with the straight tile behind that: the rules make the curve out of the
+		// two virtual tiles, and the proper diagonal tile out of the first cell.
+		for (const uint8_t variant : variants) {
+			for (auto point = dragged.begin(); dragged.end() - point >= 3; point++) {
+				auto cell = findCell(*point);
+				auto next = findCell(*(point + 1));
+				const int8_t dir1 = dirOf(*point, *(point + 1));
+				const int8_t dir2 = dirOf(*(point + 1), *(point + 2));
+				if (cell == cellsBuffer.end() || next == cellsBuffer.end() || ((dir1 ^ dir2) & 1) == 0) {
+					continue;  // not a diagonal here
+				}
+				// The cell behind the start is entered by a step like the first and left by a step like the second,
+				// as the second cell of the drag is, so it has the same plain tile.
+				Cell virtualStraight = virtualTile(dir1, variant);
+				Cell virtualDiagonal = *next;
+				const Cell plainCell = *cell;
+				if (PatchTilePair2(virtualStraight, virtualDiagonal, dir1) == Matched
+						&& PatchTilePair2(virtualDiagonal, *cell, dir2) == Matched && cell->id != plainCell.id) {
+					return;
+				}
+				*cell = plainCell;
 			}
 		}
 	}
