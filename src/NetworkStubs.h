@@ -116,7 +116,9 @@ class cSC4NetworkTool
 		};
 		static_assert(sizeof(tIntersection) == 0x28);
 
-		// The start of the vtable of every network tool (road, rail, ... each have their own vtable).
+		// The start of the vtable of every network tool (road, rail, ... each have their own vtable), in the order of
+		// cISC4NetworkTool in gzcom-dll. Copies of that header from before its commit d1c75a6 have ClearCellPreviews
+		// and ClearOccupantHighlights the wrong way around.
 		struct tVtable
 		{
 			void* RESERVED[0x40 / 4];
