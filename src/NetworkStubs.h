@@ -116,6 +116,27 @@ class cSC4NetworkTool
 		};
 		static_assert(sizeof(tIntersection) == 0x28);
 
+		// The start of the vtable of every network tool (road, rail, ... each have their own vtable).
+		struct tVtable
+		{
+			void* RESERVED[0x40 / 4];
+			// Removes the previews of the cells of the drag. The power line and underground tools have their own.
+			void (__thiscall* ClearCellPreviews)(cSC4NetworkTool* pThis);
+			void* RESERVED[2];
+			// Places the network between the anchor points, for the preview on every mouse move and once more
+			// to commit. It clears the cell previews before it draws.
+			void (__thiscall* PlaceAllSegments)(cSC4NetworkTool* pThis, uint8_t commit, uint8_t straightOnly, uint8_t unknown, uint32_t networkType);
+		};
+		static_assert(offsetof(tVtable, ClearCellPreviews) == 0x40);
+		static_assert(offsetof(tVtable, PlaceAllSegments) == 0x4c);
+
+		// The vtables of the network tools, and the functions that most of them have in the slots above.
+		static inline tVtable* const sVtables[] = {
+			reinterpret_cast<tVtable*>(0xaa8748), reinterpret_cast<tVtable*>(0xaa99a8), reinterpret_cast<tVtable*>(0xaa9f30),
+			reinterpret_cast<tVtable*>(0xaaa5c0), reinterpret_cast<tVtable*>(0xaaa950)};
+		static inline const auto ClearCellPreviews = reinterpret_cast<decltype(tVtable::ClearCellPreviews)>(0x625580);
+		static inline const auto PlaceAllSegments = reinterpret_cast<decltype(tVtable::PlaceAllSegments)>(0x63bdc0);
+
 		static inline cSC4NetworkTypeInfo* const sNetworkTypeInfo = (reinterpret_cast<cSC4NetworkTypeInfo*>(0xb452c8));
 
 		typedef cISC4NetworkOccupant::eNetworkType (*pfn_GetFirstNetworkTypeFromFlags)(uint32_t networkTypeFlags);
@@ -163,7 +184,8 @@ class cSC4NetworkTool
 		SC4Vector<tSolvedCell> solvedCells;
 		uint8_t RESERVED[0xcc - 0xa4];
 		SC4Vector<tIntersection> highwayIntersections;
-		uint8_t RESERVED[0x124 - 0xd8];
+		uint8_t RESERVED[0x118 - 0xd8];
+		SC4Vector<SC4Point<uint32_t>> anchorPoints;  // where the player started the drag and bent it, set by the UI
 		cSC4VertexHtConstraintSatisfier vertexHtConstraintSatisfier1;
 		cSC4VertexHtConstraintSatisfier vertexHtConstraintSatisfier2;
 		uint8_t RESERVED[0x240 - 0x1ec];
@@ -174,6 +196,7 @@ class cSC4NetworkTool
 static_assert(offsetof(cSC4NetworkTool, networkWorldCache) == 0x1c);
 static_assert(offsetof(cSC4NetworkTool, draggedSteps) == 0x54);
 static_assert(offsetof(cSC4NetworkTool, solvedCells) == 0x98);
+static_assert(offsetof(cSC4NetworkTool, anchorPoints) == 0x118);
 static_assert(offsetof(cSC4NetworkTool, vertexHtConstraintSatisfier1) == 0x124);
 static_assert(sizeof(cSC4NetworkTool) == 0x270);
 
