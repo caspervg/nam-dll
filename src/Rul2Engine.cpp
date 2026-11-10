@@ -305,11 +305,13 @@ namespace
 				Cell virtualStraight = virtualTile(dir, variant);
 				const Cell plainCell = *cell;
 				if (PatchTilePair2(virtualStraight, *cell, dir) == Matched) {
-					if (cell->id == sOverrideDragTile) {
+					// Inside the drag, any tile the rules make starts the network: networks such as fractional angles
+					// go through a cycle of tiles. At the start of the drag the rules can also make the end stub of the
+					// network out of the end stub of the drag, and nothing spreads from that, so there only the tile
+					// itself counts. Otherwise leave the cell alone and try the next one.
+					if (cell->id == sOverrideDragTile || (point != dragged.begin() && cell->id != plainCell.id)) {
 						return 1;
 					}
-					// The rules made something else of this cell, for example the end stub of the network out of the
-					// end stub of the drag. Nothing spreads from that, so leave the cell alone and try the next one.
 					*cell = plainCell;
 				}
 			}
