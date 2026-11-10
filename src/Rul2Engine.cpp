@@ -239,7 +239,145 @@ namespace
 		return NoMatch;
 	}
 
+	// The tile that seeds the drag being solved, 0 = none, and its orientation in the frame where the drag heads south.
+	uint32_t sOverrideDragTile = 0;
+	RotFlip sOverrideDragRotFlip = R0F0;
+	uint32_t sOverrideDragStart = 0xFFFFFFFF;  // the cell where the player started the drag, as z << 16 | x
+
+	// Override network drag: pretend a tile of the override network lies right behind a dragged cell, as a starter
+	// piece would, and let the regular override rules convert that cell. The main loop then propagates it along the drag.
+	// Returns what seeded the drag, for the drag log: 0 nothing, 1 a straight tile, 2 the lead-in of a diagonal.
+	int seedOverrideDrag(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
+	{
+		typedef cSC4NetworkTool::tSolvedCell Cell;
+		auto& draggedCells = networkTool->draggedCells;
+		if (sOverrideDragTile == 0 || draggedCells.size() < 2) {  // FLEX pieces simulate a drag of one cell
+			return 0;
+		}
+		// The first cells of the drag in the order of the drag. The game does not list them that way: on a diagonal
+		// to the north-west, for example, the two cells of every step are swapped. So walk from the start to the next
+		// cell that touches the last one.
+		std::vector<SC4Point<uint32_t>> dragged;
+		auto start = std::find_if(draggedCells.begin(), draggedCells.end(),
+				[](const SC4Point<uint32_t>& p) { return ((p.y << 16) | p.x) == sOverrideDragStart; });
+		dragged.push_back(start != draggedCells.end() ? *start : *draggedCells.begin());
+		while (dragged.size() < 32) {
+			const SC4Point<uint32_t> last = dragged.back();
+			auto next = std::find_if(draggedCells.begin(), draggedCells.end(), [&](const SC4Point<uint32_t>& p) {
+				const int32_t dx = p.x - last.x, dz = p.y - last.y;
+				return dx * dx + dz * dz == 1
+						&& std::none_of(dragged.begin(), dragged.end(), [&p](const SC4Point<uint32_t>& q) { return q.x == p.x && q.y == p.y; });
+			});
+			if (next == draggedCells.end()) {
+				break;
+			}
+			dragged.push_back(*next);
+		}
+		if (dragged.size() < 2) {
+			return 0;
+		}
+		const auto findCell = [&cellsBuffer](const SC4Point<uint32_t>& point) {
+			const uint32_t xz = (point.y << 16) | point.x;
+			return std::find_if(cellsBuffer.begin(), cellsBuffer.end(), [xz](const Cell& c) { return c.xz == xz; });
+		};
+		// A step of the drag as PatchTilePair2 wants it: where the second cell lies as seen from the first.
+		const auto dirOf = [](const SC4Point<uint32_t>& from, const SC4Point<uint32_t>& to) -> int8_t {
+			const int32_t dx = to.x - from.x, dz = to.y - from.y;
+			return dx > 0 ? 2 : dx < 0 ? 0 : dz > 0 ? 3 : 1;
+		};
+		// The override tile heading along a step. Rotations count clockwise from south: south, west, north, east.
+		const auto virtualTile = [](int8_t dir, uint8_t variant) -> Cell {
+			const uint32_t heading = (dir + 1) & 3;
+			return {sOverrideDragTile, static_cast<RotFlip>(rotate(sOverrideDragRotFlip, heading) ^ variant), 0};
+		};
+
+		// The virtual tile first heads along the drag, which gives networks with a direction of travel that direction.
+		// Networks without one often only have rules for some orientations (a starter piece can then only be dragged
+		// out of one side), so the other orientations along the same axis are tried next.
+		const uint8_t variants[] = {0x00, 0x02, 0x80, 0x82};
+		for (const uint8_t variant : variants) {
+			for (auto point = dragged.begin(); point + 1 != dragged.end(); point++) {
+				auto cell = findCell(*point);
+				if (cell == cellsBuffer.end()) {
+					continue;
+				}
+				const int8_t dir = dirOf(*point, *(point + 1));
+				Cell virtualStraight = virtualTile(dir, variant);
+				const Cell plainCell = *cell;
+				if (PatchTilePair2(virtualStraight, *cell, dir) == Matched) {
+					// Inside the drag, any tile the rules make starts the network: networks such as fractional angles
+					// go through a cycle of tiles. At the start of the drag the rules can also make the end stub of the
+					// network out of the end stub of the drag, and nothing spreads from that, so there only the tile
+					// itself counts. Otherwise leave the cell alone and try the next one.
+					if (cell->id == sOverrideDragTile || (point != dragged.begin() && cell->id != plainCell.id)) {
+						return 1;
+					}
+					*cell = plainCell;
+				}
+			}
+		}
+
+		// The drag starts on a diagonal, which is a staircase of cells whose steps alternate between two directions.
+		// A straight tile right behind it would make half a curve of the first cell. So pretend the staircase goes on
+		// for one more cell behind the start, with the straight tile behind that: the rules make the curve out of the
+		// two virtual tiles, and the proper diagonal tile out of the first cell.
+		for (const uint8_t variant : variants) {
+			for (auto point = dragged.begin(); dragged.end() - point >= 3; point++) {
+				auto cell = findCell(*point);
+				auto next = findCell(*(point + 1));
+				const int8_t dir1 = dirOf(*point, *(point + 1));
+				const int8_t dir2 = dirOf(*(point + 1), *(point + 2));
+				if (cell == cellsBuffer.end() || next == cellsBuffer.end() || ((dir1 ^ dir2) & 1) == 0) {
+					continue;  // not a diagonal here
+				}
+				// The cell behind the start is entered by a step like the first and left by a step like the second,
+				// as the second cell of the drag is, so it has the same plain tile.
+				Cell virtualStraight = virtualTile(dir1, variant);
+				Cell virtualDiagonal = *next;
+				const Cell plainCell = *cell;
+				if (PatchTilePair2(virtualStraight, virtualDiagonal, dir1) == Matched
+						&& PatchTilePair2(virtualDiagonal, *cell, dir2) == Matched && cell->id != plainCell.id) {
+					return 2;
+				}
+				*cell = plainCell;
+			}
+		}
+		return 0;
+	}
+
+	bool sDragLog = false;  // set for the drag being committed when the log level is Debug
+
+	// One line with the first cells of the drag as they are in the buffer: (x,z) tile,rotation, 0x80 = flipped.
+	void logDrag(const char* when, cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
+	{
+		char line[1024];
+		int length = 0;
+		auto& dragged = networkTool->draggedCells;
+		for (auto point = dragged.begin(); point != dragged.end() && point - dragged.begin() < 10 && length < 900; point++) {
+			const uint32_t xz = (point->y << 16) | point->x;
+			auto cell = std::find_if(cellsBuffer.begin(), cellsBuffer.end(), [xz](const cSC4NetworkTool::tSolvedCell& c) { return c.xz == xz; });
+			if (cell == cellsBuffer.end()) {
+				length += snprintf(line + length, sizeof(line) - length, " (%u,%u) -", point->x, point->y);
+			} else {
+				length += snprintf(line + length, sizeof(line) - length, " (%u,%u) %08x,%02x", point->x, point->y, cell->id, cell->rf);
+			}
+		}
+		Logger::GetInstance().WriteLineFormatted(LogLevel::Debug, "Drag log %s: %u dragged, %u in buffer, seed tile %08x:%s",
+				when, static_cast<uint32_t>(dragged.size()), static_cast<uint32_t>(cellsBuffer.size()), sOverrideDragTile, line);
+	}
+
+	bool adjustTileSubsets(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer);
+
 	bool AdjustTileSubsets2(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
+	{
+		const bool ok = adjustTileSubsets(networkTool, cellsBuffer);
+		if (sDragLog) {
+			logDrag(ok ? "after RUL2" : "after RUL2 (red)", networkTool, cellsBuffer);
+		}
+		return ok;
+	}
+
+	bool adjustTileSubsets(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
 	{
 		// if (sTileConflictRules == nullptr) {
 		// 	return true;  // success as RUL2 file was not yet loaded
@@ -252,6 +390,14 @@ namespace
 
 		if (cellsBuffer.empty()) {
 			return true;
+		}
+		if (sDragLog) {
+			logDrag("solved", networkTool, cellsBuffer);
+		}
+		const int seeded = seedOverrideDrag(networkTool, cellsBuffer);
+		if (sDragLog) {
+			Logger::GetInstance().WriteLineFormatted(LogLevel::Debug, "Drag log seed: %s", seeded == 1 ? "straight" : seeded == 2 ? "diagonal" : "none");
+			logDrag("seeded", networkTool, cellsBuffer);
 		}
 		cSC4NetworkTool::tSolvedCell* cell = cellsBuffer.begin();
 		bool foundMatch = false;
@@ -394,4 +540,16 @@ void Rul2Engine::Install()
 	// sTileConflictRules2.reserve(4500 * 1000);  // TODO
 	Patching::InstallHook(AdjustTileSubsets_InjectPoint, Hook_AdjustTileSubsets);
 	Patching::InstallHook(AddRuleOverrides_InjectPoint, Hook_AddRuleOverrides);
+}
+
+void Rul2Engine::SetDragLog(bool enabled)
+{
+	sDragLog = enabled;
+}
+
+void Rul2Engine::SetOverrideDragSeed(uint32_t tileId, RotFlip rotFlip, uint32_t startXz)
+{
+	sOverrideDragTile = tileId;
+	sOverrideDragRotFlip = rotFlip;
+	sOverrideDragStart = startXz;
 }

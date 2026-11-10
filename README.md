@@ -31,6 +31,11 @@ You can customize the shortcuts to use different keys, see the documentation at 
 If you are using a mod that alters the city keyboard shortcuts such as CasperVG's AutoHistorical DLL mod, you will need to edit the KEYCFG
 file included in that mod.
 
+## For DLL Authors
+
+Other DLLs can let the player drag an override network such as RHW-4 directly, without a starter piece, through the GZCOM class in [cIOverrideNetworkDrag.h](src/cIOverrideNetworkDrag.h).
+Copy that header into your project; it explains how to get and use the class.
+
 ## System Requirements
 
 * SimCity 4, version 1.1.641 (the digital release)
