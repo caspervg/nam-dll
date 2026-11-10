@@ -8,11 +8,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <set>
-#include <string>
-#include <tuple>
-#include "Logger.h"
 
 /*
 	Neighbor connection patch
@@ -631,37 +626,6 @@ namespace
 		return mask;
 	}
 
-	// PLAYTEST DIAGNOSTICS (test/all-patches only): one line per distinct edge tile, search direction and outcome.
-	// Strip entries are offset:ncMask/pathMatrix/direction (N=none, I=inbound, O=outbound, B=both), x = not eligible.
-	void LogPairing(cSC4TrafficSimulator* const pTrafficSim, const char* const mode, const int32_t originX, const int32_t originZ,
-		const uint16_t originMask, const bool reverseSearch, const int32_t stepX, const int32_t stepZ, const uint16_t eligibleNcMask,
-		const bool paired, const int32_t resultX, const int32_t resultZ)
-	{
-		static std::set<std::tuple<int32_t, int32_t, bool, bool>> seen;
-		if (seen.size() >= 500 || !seen.emplace(originX, originZ, reverseSearch, paired).second)
-		{
-			return;
-		}
-
-		std::string strip;
-		char entry[48];
-		for (int32_t offset = -static_cast<int32_t>(gMaxSearchDistance); offset <= static_cast<int32_t>(gMaxSearchDistance); ++offset)
-		{
-			const EdgeTile tile = ReadEdgeTile(pTrafficSim, originX, originZ, stepX, stepZ, eligibleNcMask, offset);
-			if (tile.valid && tile.ncMask != 0)
-			{
-				std::snprintf(entry, sizeof(entry), " %+d:%04X/%04X/%c%s", offset, tile.ncMask, tile.pathMatrix,
-					"NIOB"[static_cast<int>(tile.direction)], tile.isEligibleNc ? "" : "x");
-				strip += entry;
-			}
-		}
-
-		Logger::GetInstance().WriteLineFormatted(LogLevel::Error,
-			"NC %s %s origin=(%d,%d) mask=%04X step=(%d,%d) %s result=(%d,%d) strip:%s",
-			mode, reverseSearch ? "rev" : "fwd", originX, originZ, originMask, stepX, stepZ,
-			paired ? "PAIRED" : "UNPAIRED", resultX, resultZ, strip.c_str());
-	}
-
 	void __fastcall FindReturnTile(cSC4TrafficSimulator* const pTrafficSim, void*, int32_t* const pX, int32_t* const pZ, const bool reverseSearch)
 	{
 		const int32_t originX = *pX;
@@ -715,9 +679,6 @@ namespace
 			*pX = originX;
 			*pZ = originZ;
 		}
-
-		LogPairing(pTrafficSim, useOWRPairing ? "OWR" : (useRHWPairing ? "RHW" : "NWM"), originX, originZ, originMask,
-			reverseSearch, stepX, stepZ, eligibleNcMask, paired, *pX, *pZ);
 	}
 
 	// OWR neighbor connections use type 13. The persisted cSC4NeighborConnection type (offset 0x24)
