@@ -47,7 +47,7 @@
 #include "wil/win32_helpers.h"
 #include "Patching.h"
 #include "Rul2Engine.h"
-#include "DirectDrag.h"
+#include "OverrideNetworkDrag.h"
 #include "NetworkSlopes.h"
 #include "FlexPieces.h"
 #include "CommuteLoop.h"
@@ -172,7 +172,7 @@ noMatchingTunnelNetwork:
 	}
 
 	template <typename F>
-	void InstallWhen(bool when, const std::string_view &name, F&& installPatch)
+	bool InstallWhen(bool when, const std::string_view &name, F&& installPatch)
 	{
 		Logger& logger = Logger::GetInstance();
 		if (!when) {
@@ -180,19 +180,24 @@ noMatchingTunnelNetwork:
 		} else try {
 			installPatch();
 			logger.WriteLineFormatted(LogLevel::Info, "Installed the %s.", name);
+			return true;
 		} catch (const wil::ResultException& e) {
 			logger.WriteLineFormatted(LogLevel::Error, "Failed to install the %s.\n%s", name, e.what());
 		}
+		return false;
 	}
 
-	void InstallNamPatches(const Settings &settings)
+	// Returns whether the Override Network Drag patch is installed.
+	bool InstallNamPatches(const Settings &settings)
 	{
+		bool overrideNetworkDrag = false;
 		InstallWhen(settings.enableDiagonalStreets, "Draggable Diagonal Streets patch", InstallDiagonalStreetsPatch);
 		InstallWhen(settings.disableAutoconnect, "Disable auto-connect for RHW and Streets patch", InstallDisableAutoconnectForStreetsPatch);
 		InstallWhen(settings.enableTunnels, "Tunnels patch for RHW, Street and Lightrail", InstallTunnelsPatch);
 		InstallWhen(settings.reduceFerryBridgeHeightPatch, "Ferry Bridge Height patch", InstallFerryBridgeHeightPatch);
-		InstallWhen(settings.enableRUL2EnginePatch, "RUL2 Engine patch", Rul2Engine::Install);
-		InstallWhen(settings.enableRUL2EnginePatch, "Direct Drag patch for override networks", DirectDrag::Install);
+		if (InstallWhen(settings.enableRUL2EnginePatch, "RUL2 Engine patch", Rul2Engine::Install)) {
+			overrideNetworkDrag = InstallWhen(true, "Override Network Drag patch", OverrideNetworkDrag::Install);
+		}
 		InstallWhen(settings.enableNetworkSlopePatch, "Network Slopes patch", NetworkSlopes::Install);
 		InstallWhen(settings.enableFlexPuzzlePiecePatch, "FLEX Puzzle Piece RUL0 patch", FlexPieces::Install);
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
@@ -200,6 +205,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableVerticalPathSeparationPatch, "Vertical Path Separation patch", PathJumping::Install);
 		InstallWhen(settings.enableDualNetworkTransitPatch, "Dual Network Transit patch", TransitNetworkMapping::Install);
 		InstallWhen(settings.enableTransportMenuPatch, "Transport Menu (Seaport/Airport) patch", TransportMenuPatch::Install);
+		return overrideNetworkDrag;
 	}
 }
 
@@ -411,12 +417,7 @@ public:
 
 		if (gameVersion == 641)
 		{
-			InstallNamPatches(settings);
-			DirectDrag::SetLogging(settings.directDragLog);
-			if (settings.directDragTile != 0) {
-				const DirectDrag::Row row = {settings.directDragTile, 0, 0};
-				DirectDrag::SetRows(&row, 1);
-			}
+			overrideNetworkDragInstalled = InstallNamPatches(settings);
 
 			cIGZFrameWork* const pFramework = RZGetFrameWork();
 			if (pFramework->GetState() < cIGZFrameWork::kStatePreAppInit)
@@ -439,10 +440,26 @@ public:
 		return true;
 	}
 
+	// The public interfaces for other DLLs, see cIOverrideNetworkDrag.h.
+	bool GetClassObject(uint32_t rclsid, uint32_t riid, void** ppvObj)
+	{
+		if (rclsid == GZCLSID_cIOverrideNetworkDrag && overrideNetworkDragInstalled) {
+			return overrideNetworkDrag.QueryInterface(riid, ppvObj);
+		}
+		return false;
+	}
+
+	void EnumClassObjects(ClassObjectEnumerationCallback pCallback, void* pContext)
+	{
+		pCallback(GZCLSID_cIOverrideNetworkDrag, 0, pContext);
+	}
+
 private:
 
 	const SC4VersionDetection versionDetection;
 	Settings settings;
+	OverrideNetworkDrag overrideNetworkDrag;
+	bool overrideNetworkDragInstalled = false;
 };
 
 cRZCOMDllDirector* RZGetCOMDllDirector() {

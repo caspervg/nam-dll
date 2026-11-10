@@ -240,18 +240,18 @@ namespace
 	}
 
 	// The tile that seeds the drag being solved, 0 = none, and its orientation in the frame where the drag heads south.
-	uint32_t sDirectDragTile = 0;
-	RotFlip sDirectDragRotFlip = R0F0;
-	uint32_t sDirectDragStart = 0xFFFFFFFF;  // the cell where the player started the drag, as z << 16 | x
+	uint32_t sOverrideDragTile = 0;
+	RotFlip sOverrideDragRotFlip = R0F0;
+	uint32_t sOverrideDragStart = 0xFFFFFFFF;  // the cell where the player started the drag, as z << 16 | x
 
-	// Direct drag: pretend a tile of the override network lies right behind a dragged cell, as a starter piece would,
-	// and let the regular override rules convert that cell. The main loop then propagates it along the drag.
+	// Override network drag: pretend a tile of the override network lies right behind a dragged cell, as a starter
+	// piece would, and let the regular override rules convert that cell. The main loop then propagates it along the drag.
 	// Returns what seeded the drag, for the drag log: 0 nothing, 1 a straight tile, 2 the lead-in of a diagonal.
-	int seedDirectDrag(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
+	int seedOverrideDrag(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
 	{
 		typedef cSC4NetworkTool::tSolvedCell Cell;
 		auto& draggedCells = networkTool->draggedCells;
-		if (sDirectDragTile == 0 || draggedCells.size() < 2) {  // FLEX pieces simulate a drag of one cell
+		if (sOverrideDragTile == 0 || draggedCells.size() < 2) {  // FLEX pieces simulate a drag of one cell
 			return 0;
 		}
 		// The first cells of the drag in the order of the drag. The game does not list them that way: on a diagonal
@@ -259,7 +259,7 @@ namespace
 		// cell that touches the last one.
 		std::vector<SC4Point<uint32_t>> dragged;
 		auto start = std::find_if(draggedCells.begin(), draggedCells.end(),
-				[](const SC4Point<uint32_t>& p) { return ((p.y << 16) | p.x) == sDirectDragStart; });
+				[](const SC4Point<uint32_t>& p) { return ((p.y << 16) | p.x) == sOverrideDragStart; });
 		dragged.push_back(start != draggedCells.end() ? *start : *draggedCells.begin());
 		while (dragged.size() < 32) {
 			const SC4Point<uint32_t> last = dragged.back();
@@ -288,7 +288,7 @@ namespace
 		// The override tile heading along a step. Rotations count clockwise from south: south, west, north, east.
 		const auto virtualTile = [](int8_t dir, uint8_t variant) -> Cell {
 			const uint32_t heading = (dir + 1) & 3;
-			return {sDirectDragTile, static_cast<RotFlip>(rotate(sDirectDragRotFlip, heading) ^ variant), 0};
+			return {sOverrideDragTile, static_cast<RotFlip>(rotate(sOverrideDragRotFlip, heading) ^ variant), 0};
 		};
 
 		// The virtual tile first heads along the drag, which gives networks with a direction of travel that direction.
@@ -305,7 +305,7 @@ namespace
 				Cell virtualStraight = virtualTile(dir, variant);
 				const Cell plainCell = *cell;
 				if (PatchTilePair2(virtualStraight, *cell, dir) == Matched) {
-					if (cell->id == sDirectDragTile) {
+					if (cell->id == sOverrideDragTile) {
 						return 1;
 					}
 					// The rules made something else of this cell, for example the end stub of the network out of the
@@ -343,7 +343,7 @@ namespace
 		return 0;
 	}
 
-	bool sDragLog = false;  // DirectDragLog in NAM.ini, set for the drag being committed
+	bool sDragLog = false;  // set for the drag being committed when the log level is Debug
 
 	// One line with the first cells of the drag as they are in the buffer: (x,z) tile,rotation, 0x80 = flipped.
 	void logDrag(const char* when, cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer)
@@ -360,8 +360,8 @@ namespace
 				length += snprintf(line + length, sizeof(line) - length, " (%u,%u) %08x,%02x", point->x, point->y, cell->id, cell->rf);
 			}
 		}
-		Logger::GetInstance().WriteLineFormatted(LogLevel::Info, "Drag log %s: %u dragged, %u in buffer, seed tile %08x:%s",
-				when, static_cast<uint32_t>(dragged.size()), static_cast<uint32_t>(cellsBuffer.size()), sDirectDragTile, line);
+		Logger::GetInstance().WriteLineFormatted(LogLevel::Debug, "Drag log %s: %u dragged, %u in buffer, seed tile %08x:%s",
+				when, static_cast<uint32_t>(dragged.size()), static_cast<uint32_t>(cellsBuffer.size()), sOverrideDragTile, line);
 	}
 
 	bool adjustTileSubsets(cSC4NetworkTool* networkTool, SC4Vector<cSC4NetworkTool::tSolvedCell>& cellsBuffer);
@@ -392,9 +392,9 @@ namespace
 		if (sDragLog) {
 			logDrag("solved", networkTool, cellsBuffer);
 		}
-		const int seeded = seedDirectDrag(networkTool, cellsBuffer);
+		const int seeded = seedOverrideDrag(networkTool, cellsBuffer);
 		if (sDragLog) {
-			Logger::GetInstance().WriteLineFormatted(LogLevel::Info, "Drag log seed: %s", seeded == 1 ? "straight" : seeded == 2 ? "diagonal" : "none");
+			Logger::GetInstance().WriteLineFormatted(LogLevel::Debug, "Drag log seed: %s", seeded == 1 ? "straight" : seeded == 2 ? "diagonal" : "none");
 			logDrag("seeded", networkTool, cellsBuffer);
 		}
 		cSC4NetworkTool::tSolvedCell* cell = cellsBuffer.begin();
@@ -545,9 +545,9 @@ void Rul2Engine::SetDragLog(bool enabled)
 	sDragLog = enabled;
 }
 
-void Rul2Engine::SetDirectDragSeed(uint32_t tileId, RotFlip rotFlip, uint32_t startXz)
+void Rul2Engine::SetOverrideDragSeed(uint32_t tileId, RotFlip rotFlip, uint32_t startXz)
 {
-	sDirectDragTile = tileId;
-	sDirectDragRotFlip = rotFlip;
-	sDirectDragStart = startXz;
+	sOverrideDragTile = tileId;
+	sOverrideDragRotFlip = rotFlip;
+	sOverrideDragStart = startXz;
 }

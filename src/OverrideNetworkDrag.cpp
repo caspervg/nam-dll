@@ -1,11 +1,14 @@
-#include "DirectDrag.h"
+#include "OverrideNetworkDrag.h"
 #include "Rul2Engine.h"
 #include "NetworkStubs.h"
 #include "Patching.h"
 #include "RotFlip.h"
+#include "Logger.h"
 #include <algorithm>
-#include <stdexcept>
 #include <vector>
+#define NOMINMAX
+#include <Windows.h>
+#include "wil/result_macros.h"
 
 namespace
 {
@@ -31,9 +34,10 @@ namespace
 		SC4Point<uint32_t>* capacity;
 	};
 
-	std::vector<DirectDrag::Row> sRows;  // the row that follows the cursor comes first
-	bool sKeepPreviews = false;          // rows after the first of a drag: the previews of the earlier rows stay
-	bool sLogging = false;
+	typedef cIOverrideNetworkDrag::TileRow TileRow;
+
+	std::vector<TileRow> sRows;  // the row that follows the cursor comes first
+	bool sKeepPreviews = false;  // rows after the first of a drag: the previews of the earlier rows stay
 
 	void __fastcall Hook_ClearCellPreviews(cSC4NetworkTool* pThis, void* edx)
 	{
@@ -42,19 +46,19 @@ namespace
 		}
 	}
 
-	void placeRow(cSC4NetworkTool* pThis, const DirectDrag::Row& row, uint8_t commit, uint8_t straightOnly, uint8_t unknown, uint32_t networkType)
+	void placeRow(cSC4NetworkTool* pThis, const TileRow& row, uint8_t commit, uint8_t straightOnly, uint8_t unknown, uint32_t networkType)
 	{
 		const AnchorPoints* anchors = reinterpret_cast<AnchorPoints*>(reinterpret_cast<uint8_t*>(pThis) + kAnchorPointsOffset);
 		const bool hasStart = anchors->start != nullptr && anchors->end > anchors->start;
-		Rul2Engine::SetDirectDragSeed(row.tile, static_cast<RotFlip>(row.rotFlip & 0x83),
+		Rul2Engine::SetOverrideDragSeed(row.straightTileId, static_cast<RotFlip>(row.rotationFlip & 0x83),
 				hasStart ? (anchors->start[0].y << 16) | anchors->start[0].x : 0xFFFFFFFF);
 		PlaceAllSegments(pThis, commit, straightOnly, unknown, networkType);
-		Rul2Engine::SetDirectDragSeed(0, R0F0);
+		Rul2Engine::SetOverrideDragSeed(0, R0F0);
 	}
 
 	void __fastcall Hook_PlaceAllSegments(cSC4NetworkTool* pThis, void* edx, uint8_t commit, uint8_t straightOnly, uint8_t unknown, uint32_t networkType)
 	{
-		Rul2Engine::SetDragLog(sLogging && commit != 0);
+		Rul2Engine::SetDragLog(commit != 0 && Logger::GetInstance().IsEnabled(LogLevel::Debug));
 		if (sRows.empty()) {
 			return PlaceAllSegments(pThis, commit, straightOnly, unknown, networkType);
 		}
@@ -65,7 +69,7 @@ namespace
 		const int32_t dx = end.x - start.x;
 		const int32_t dz = end.y - start.y;
 		if (sRows.size() == 1 || !isSegment || (dx == 0) == (dz == 0)) {
-			// ponytail: the other rows only follow a straight orthogonal drag. A bend or a diagonal needs a parallel
+			// TODO the other rows only follow a straight orthogonal drag. A bend or a diagonal needs a parallel
 			// curve for every row.
 			return placeRow(pThis, sRows.front(), commit, straightOnly, unknown, networkType);
 		}
@@ -75,7 +79,7 @@ namespace
 		const int32_t eastZ = dx > 0 ? -1 : dx < 0 ? 1 : 0;
 		const int32_t maxX = static_cast<int32_t>(pThis->numCellsX) - 1;
 		const int32_t maxZ = static_cast<int32_t>(pThis->numCellsZ) - 1;
-		for (const DirectDrag::Row& row : sRows) {
+		for (const TileRow& row : sRows) {
 			const int32_t x = row.offset * eastX;
 			const int32_t z = row.offset * eastZ;
 			const int32_t x0 = start.x + x, z0 = start.y + z, x1 = end.x + x, z1 = end.y + z;
@@ -93,23 +97,11 @@ namespace
 	}
 }
 
-void DirectDrag::SetRows(const Row* rows, uint32_t count)
-{
-	sRows.assign(rows, rows + (rows != nullptr ? count : 0));
-	std::stable_partition(sRows.begin(), sRows.end(), [](const Row& row) { return row.offset == 0; });
-}
-
-void DirectDrag::SetLogging(bool enabled)
-{
-	sLogging = enabled;
-}
-
-void DirectDrag::Install()
+void OverrideNetworkDrag::Install()
 {
 	for (uint32_t vtable : kVtables) {
-		if (*reinterpret_cast<uint32_t*>(vtable + kSlotPlaceAllSegments) != kPlaceAllSegments) {
-			throw std::runtime_error("A network tool vtable is not as expected, another DLL may have patched it.");
-		}
+		// another DLL may have patched it already
+		THROW_HR_IF(E_FAIL, *reinterpret_cast<uint32_t*>(vtable + kSlotPlaceAllSegments) != kPlaceAllSegments);
 	}
 	for (uint32_t vtable : kVtables) {
 		Patching::OverwriteMemory(reinterpret_cast<void*>(vtable + kSlotPlaceAllSegments), reinterpret_cast<uint32_t>(&Hook_PlaceAllSegments));
@@ -120,9 +112,40 @@ void DirectDrag::Install()
 	}
 }
 
-// For other DLLs, for example a menu of override networks. They find it with
-// GetProcAddress(GetModuleHandle("NAM.dll"), "NamSetDirectDragRows").
-extern "C" __declspec(dllexport) void __cdecl NamSetDirectDragRows(const DirectDrag::Row* rows, uint32_t count)
+bool OverrideNetworkDrag::QueryInterface(uint32_t riid, void** ppvObj)
 {
-	DirectDrag::SetRows(rows, count);
+	if (riid == GZIID_cIOverrideNetworkDrag) {
+		*ppvObj = static_cast<cIOverrideNetworkDrag*>(this);
+	} else if (riid == GZIID_cIGZUnknown) {
+		*ppvObj = static_cast<cIGZUnknown*>(this);
+	} else {
+		return false;
+	}
+	AddRef();
+	return true;
+}
+
+uint32_t OverrideNetworkDrag::AddRef()
+{
+	return ++refCount;
+}
+
+uint32_t OverrideNetworkDrag::Release()
+{
+	// the director owns the only instance
+	if (refCount > 0) {
+		--refCount;
+	}
+	return refCount;
+}
+
+void OverrideNetworkDrag::SetOverrideNetwork(const TileRow* rows, uint32_t rowCount)
+{
+	sRows.assign(rows, rows + (rows != nullptr ? rowCount : 0));
+	std::stable_partition(sRows.begin(), sRows.end(), [](const TileRow& row) { return row.offset == 0; });
+}
+
+void OverrideNetworkDrag::ClearOverrideNetwork()
+{
+	sRows.clear();
 }

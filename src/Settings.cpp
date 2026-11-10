@@ -1,7 +1,6 @@
 #include "Settings.h"
 #include "Logger.h"
 #include "mini/ini.h"
-#include <cstdlib>
 
 Settings::Settings() :
 	enableDiagonalStreets(true),
@@ -16,9 +15,7 @@ Settings::Settings() :
 	enableVerticalPathSeparationPatch(true),
 	enableDualNetworkTransitPatch(false),
 	enableTransportMenuPatch(true),
-	enableKeyboardShortcuts(true),
-	directDragLog(false),
-	directDragTile(0) {};
+	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
 {
@@ -43,8 +40,6 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableVerticalPathSeparationPatch", enableVerticalPathSeparationPatch);
 			readBoolProp("EnableDualNetworkTransitPatch", enableDualNetworkTransitPatch);
 			readBoolProp("EnableTransportMenuPatch", enableTransportMenuPatch);
-			readBoolProp("DirectDragLog", directDragLog);
-			directDragTile = std::strtoul(ini.get("NAM").get("DirectDragTile").c_str(), nullptr, 16);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}
