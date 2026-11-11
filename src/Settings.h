@@ -38,7 +38,7 @@ public:
 	int ghostPreviewCutColor[3];
 	int ghostPreviewFillColor[3];
 	bool enableUndergroundPlaceholderPatch;
-	bool enableBridgeLastTileAbutmentPatch;
+	bool enableBridgeShoreAbutmentPatch;
 	bool enableBridgeFarAbutmentClearancePatch;
 	bool enableParallelBridgesPatch;
 	bool enableBridgeDebugLog;

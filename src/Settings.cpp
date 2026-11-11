@@ -110,7 +110,7 @@ Settings::Settings() :
 	ghostPreviewCutColor{239, 28, 36},  // NAM hole digger red
 	ghostPreviewFillColor{63, 73, 206},  // NAM raiser blue
 	enableUndergroundPlaceholderPatch(true),
-	enableBridgeLastTileAbutmentPatch(true),
+	enableBridgeShoreAbutmentPatch(true),
 	enableBridgeFarAbutmentClearancePatch(true),
 	enableParallelBridgesPatch(false),
 	enableBridgeDebugLog(false),
@@ -191,7 +191,7 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readColorProp("GhostPreviewCutColor", ghostPreviewCutColor);
 			readColorProp("GhostPreviewFillColor", ghostPreviewFillColor);
 			readBoolProp("EnableUndergroundPlaceholderPatch", enableUndergroundPlaceholderPatch);
-			readBoolProp("EnableBridgeLastTileAbutmentPatch", enableBridgeLastTileAbutmentPatch);
+			readBoolProp("EnableBridgeShoreAbutmentPatch", enableBridgeShoreAbutmentPatch);
 			readBoolProp("EnableBridgeFarAbutmentClearancePatch", enableBridgeFarAbutmentClearancePatch);
 			readBoolProp("EnableParallelBridgesPatch", enableParallelBridgesPatch);
 			readBoolProp("EnableBridgeDebugLog", enableBridgeDebugLog);

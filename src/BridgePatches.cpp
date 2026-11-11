@@ -3,7 +3,6 @@
 #include "Patching.h"
 #include "NetworkStubs.h"
 #include "cISTETerrain.h"
-#include <algorithm>
 #include <string>
 
 // How the network tool places bridges (cSC4NetworkTool, from the Mac binary, verified on Windows):
@@ -22,66 +21,122 @@ namespace
 	// custom calling convention: occupant manager in esi, arguments on stack, caller cleans up.
 	constexpr uint32_t IsStepGoodForBridge = 0x62fdb0;
 
-	bool sLastTileAbutmentInstalled = false;
-	bool sFarAbutmentClearanceInstalled = false;
-	bool sParallelBridgesInstalled = false;
+	typedef void (__thiscall* pfn_IdentifyBridgeCells)(cSC4NetworkTool* pThis, int32_t* stepCount, int32_t networkType);
+	typedef bool (__thiscall* pfn_SelectBridgeStartAndEnd)(cSC4NetworkTool* pThis, int32_t firstWaterStep, int32_t* start, int32_t* end, int32_t* bridgeType, float* deckHeight, int32_t networkType);
+	typedef bool (__thiscall* pfn_CheckBridgeStepEdgeTypes)(cSC4NetworkTool* pThis, int32_t step, int32_t networkType);
+	const auto IdentifyBridgeCells = reinterpret_cast<pfn_IdentifyBridgeCells>(0x632830);
+	const auto SelectBridgeStartAndEnd = reinterpret_cast<pfn_SelectBridgeStartAndEnd>(0x630570);
+	const auto CheckBridgeStepEdgeTypes = reinterpret_cast<pfn_CheckBridgeStepEdgeTypes>(0x62eb80);
 
-	// Patch 1: Last-tile abutment
+	bool sShoreAbutmentInstalled = false;
+	bool sFarAbutmentClearanceInstalled = false;
+
+	bool isWaterStep(const cSC4NetworkTool* networkTool, int32_t step)
+	{
+		const cSC4NetworkTool::tDraggedStep draggedStep = networkTool->draggedSteps[step];
+		for (uint32_t i = draggedStep.firstCellIndex; i <= draggedStep.lastCellIndex; i++) {
+			const SC4Point<uint32_t> cell = networkTool->draggedCells[i];
+			if (networkTool->terrain->CellHasWater(cell.x, cell.y)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	uint32_t stepType(const cSC4NetworkTool* networkTool, int32_t step)
+	{
+		return networkTool->draggedSteps[step].stepType;
+	}
+
+	// Whether the drag ends on the first dry step after the water, which then stays a regular network
+	// tile, with the far abutment on the shore step before it (see the shore abutment patch).
+	bool isShoreStubStep(const cSC4NetworkTool* networkTool, int32_t step)
+	{
+		return sShoreAbutmentInstalled
+			&& networkTool->terrain != nullptr
+			&& step == networkTool->validStepCount - 1
+			&& !isWaterStep(networkTool, step);
+	}
+
+	// Patch 1: Shore abutment
 	//
-	// SelectBridgeStartAndEnd requires the far abutment to lie before the last dragged step:
+	// SelectBridgeStartAndEnd requires the first dry step after the water, the far abutment, to lie
+	// before the last dragged step:
 	//   mov edx, dword ptr [edi + 0x78]  ; number of valid dragged steps
 	//   dec edx
 	//   cmp eax, edx                     ; current step < validSteps - 1
-	// so the drag has to extend one tile beyond the far abutment, otherwise the whole drag fails.
-	// The near abutment has no such requirement as it may be a partially submerged shore tile.
-	// Removing the `dec`s matches the bound that PadStepsToMakeMinBridgeSpan (0x62ecd0) already uses
-	// when it extends a bridge forwards, so bridges ending on the last dragged step already occur.
+	// so the drag has to extend one tile beyond the far bank, otherwise the whole drag fails. MSVC
+	// rotated the loop, so this bound appears twice: before the loop, for the first step after the
+	// water starts, and at the bottom of the loop, for every following step.
 	//
-	// MSVC rotated the loop, so the bound appears twice: before the loop, for the first step after
-	// the water starts, and at the bottom of the loop, for every following step.
+	// The near side is more lenient: IdentifyBridgeCells only searches for water from step 2, so a drag
+	// starting next to the water puts the near abutment on the shore step 1, and step 0 stays a regular
+	// network tile. We mirror this on the far side. Without the `dec`s, the search may reach the last
+	// step. If the drag ends on the first dry step, the far abutment moves back onto the shore step before
+	// it, which shares two dry corners with the land, and the dry step stays a regular network tile to
+	// continue the network from. As on the near side, that step skips the checks for bridge steps.
 	constexpr uint32_t SelectBridgeStartAndEnd_ValidStepsBound = 0x6305af;
 	constexpr uint32_t SelectBridgeStartAndEnd_DecValidSteps = 0x6305b2;
 	constexpr uint32_t SelectBridgeStartAndEnd_LoopValidStepsBound = 0x6306ad;
 	constexpr uint32_t SelectBridgeStartAndEnd_LoopDecValidSteps = 0x6306b2;
+	constexpr uint32_t SelectBridgeStartAndEnd_CheckBridgeStepEdgeTypesCall = 0x630616;
+	constexpr uint32_t SelectBridgeStartAndEnd_FarAbutmentFound = 0x630662;
+	constexpr uint32_t SelectBridgeStartAndEnd_FarAbutmentFound_Continue = 0x630667;
+
+	bool __fastcall Hook_SelectBridgeStartAndEnd_CheckBridgeStepEdgeTypes(cSC4NetworkTool* pThis, void* edx, int32_t step, int32_t networkType)
+	{
+		if (isShoreStubStep(pThis, step)) {
+			return true;  // the step stays a regular network tile, which may join an existing network
+		}
+		return CheckBridgeStepEdgeTypes(pThis, step, networkType);
+	}
+
+	void NAKED_FUN Hook_SelectBridgeStartAndEnd_FarAbutmentFound(void)
+	{
+		// ebx: int32_t* end, the first dry step after the water; edi: cSC4NetworkTool*
+		__asm {
+			mov edx, dword ptr [edi + 0x78];  // validStepCount
+			dec edx;
+			cmp dword ptr [ebx], edx;
+			jne notLastStep;
+			dec dword ptr [ebx];  // the drag ends on the first dry step: the shore step before it is the far abutment
+
+notLastStep:
+			mov edx, dword ptr [ebx];  // replaced instructions
+			cmp edx, dword ptr [edi + 0x74];  // end < straightStepCount
+			push SelectBridgeStartAndEnd_FarAbutmentFound_Continue;  // jge fail
+			ret;
+		}
+	}
 
 	// Patch 2: Far abutment clearance
 	//
 	// In SelectBridgeStartAndEnd, the IsStepGoodForBridge check also runs on the far abutment, before it
-	// is known to be dry. Its one-tile margin then includes the tile beyond the far abutment. The
-	// abutment row itself is already covered by the margin of the last water step, and the near
-	// abutment never gets this check, so only the tile row behind the far abutment is affected.
+	// is known to be the abutment. Its one-tile margin then includes the tile row beyond the far
+	// abutment. The abutment row itself is already covered by the margin of the previous water step, and
+	// the near abutment never gets this check, so only the row behind the far abutment is affected.
 	constexpr uint32_t SelectBridgeStartAndEnd_IsStepGoodForBridgeCall = 0x630604;
 
-	bool __cdecl isFarAbutmentStep(const cSC4NetworkTool* networkTool, uint32_t x1, uint32_t z1, uint32_t x2, uint32_t z2)
+	bool __cdecl isFarAbutmentStep(const cSC4NetworkTool* networkTool, int32_t step)
 	{
-		cISTETerrain* const terrain = networkTool->terrain;
-		if (terrain == nullptr) {
+		if (networkTool->terrain == nullptr) {
 			return false;
 		}
-		// The bounding box of the first and last cell of the step. For diagonal steps, this may
-		// include cells not belonging to the step, which errs on the side of the vanilla check.
-		for (uint32_t x = std::min(x1, x2); x <= std::max(x1, x2); x++) {
-			for (uint32_t z = std::min(z1, z2); z <= std::max(z1, z2); z++) {
-				if (terrain->CellHasWater(x, z)) {
-					return false;  // water step, not the far abutment
-				}
-			}
+		if (!isWaterStep(networkTool, step)) {
+			return true;  // the first dry step after the water
 		}
-		return true;  // first dry step after the water, i.e. the far abutment
+		return isShoreStubStep(networkTool, step + 1);  // the shore step before a dry last step
 	}
 
 	void NAKED_FUN Hook_SelectBridgeStartAndEnd_IsStepGoodForBridge(void)
 	{
-		// esi: cISC4OccupantManager*, edi: cSC4NetworkTool*
+		// esi: cISC4OccupantManager*, edi: cSC4NetworkTool*, ebx: int32_t* end, the step to check
 		// [esp+0x4] filter, [esp+0x8] x1, [esp+0xc] z1, [esp+0x10] x2, [esp+0x14] z2
 		__asm {
-			push dword ptr [esp + 0x14];  // z2
-			push dword ptr [esp + 0x14];  // x2
-			push dword ptr [esp + 0x14];  // z1
-			push dword ptr [esp + 0x14];  // x1
+			push dword ptr [ebx];  // step
 			push edi;  // networkTool
 			call isFarAbutmentStep;  // (cdecl)
-			add esp, 0x14;
+			add esp, 0x8;
 			test al, al;
 			jz vanillaCheck;
 			ret;  // al = true: skip the clearance check for the far abutment
@@ -181,13 +236,6 @@ vanillaCheck:
 		return description;
 	}
 
-	typedef void (__thiscall* pfn_IdentifyBridgeCells)(cSC4NetworkTool* pThis, int32_t* stepCount, int32_t networkType);
-	typedef bool (__thiscall* pfn_SelectBridgeStartAndEnd)(cSC4NetworkTool* pThis, int32_t firstWaterStep, int32_t* start, int32_t* end, int32_t* bridgeType, float* deckHeight, int32_t networkType);
-	typedef bool (__thiscall* pfn_CheckBridgeStepEdgeTypes)(cSC4NetworkTool* pThis, int32_t step, int32_t networkType);
-	const auto IdentifyBridgeCells = reinterpret_cast<pfn_IdentifyBridgeCells>(0x632830);
-	const auto SelectBridgeStartAndEnd = reinterpret_cast<pfn_SelectBridgeStartAndEnd>(0x630570);
-	const auto CheckBridgeStepEdgeTypes = reinterpret_cast<pfn_CheckBridgeStepEdgeTypes>(0x62eb80);
-
 	// Calls IsStepGoodForBridge, which expects the occupant manager in esi. (cdecl)
 	bool NAKED_FUN callIsStepGoodForBridge(intptr_t occupantManager, intptr_t filter, int32_t x1, int32_t z1, int32_t x2, int32_t z2)
 	{
@@ -207,30 +255,13 @@ vanillaCheck:
 		}
 	}
 
-	bool isWaterStep(const cSC4NetworkTool* networkTool, int32_t step)
-	{
-		const cSC4NetworkTool::tDraggedStep draggedStep = networkTool->draggedSteps[step];
-		for (uint32_t i = draggedStep.firstCellIndex; i <= draggedStep.lastCellIndex; i++) {
-			const SC4Point<uint32_t> cell = networkTool->draggedCells[i];
-			if (networkTool->terrain->CellHasWater(cell.x, cell.y)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
 	bool isStepGoodForBridge(const cSC4NetworkTool* networkTool, int32_t step)
 	{
 		const cSC4NetworkTool::tDraggedStep draggedStep = networkTool->draggedSteps[step];
 		const SC4Point<uint32_t> first = networkTool->draggedCells[draggedStep.firstCellIndex];
 		const SC4Point<uint32_t> last = networkTool->draggedCells[draggedStep.lastCellIndex];
-		const intptr_t filter = *reinterpret_cast<const intptr_t*>(reinterpret_cast<const uint8_t*>(networkTool) + kNetworkToolBridgeFilterOffset);
+		const intptr_t filter = readField<intptr_t>(networkTool, kNetworkToolBridgeFilterOffset);
 		return callIsStepGoodForBridge(networkTool->occupantManager, filter, first.x, first.y, last.x, last.y);
-	}
-
-	uint32_t stepType(const cSC4NetworkTool* networkTool, int32_t step)
-	{
-		return networkTool->draggedSteps[step].stepType;
 	}
 
 	// Repeats the checks of SelectBridgeStartAndEnd, including the patches installed here.
@@ -246,10 +277,10 @@ vanillaCheck:
 			snprintf(reason, sizeof(reason), "the existing network on the near abutment (step %d) does not allow a bridge", start);
 			return reason;
 		}
-		const int32_t endBound = networkTool->validStepCount - (sLastTileAbutmentInstalled ? 0 : 1);
+		const int32_t endBound = networkTool->validStepCount - (sShoreAbutmentInstalled ? 0 : 1);
 		for (int32_t end = firstWaterStep + 1; ; end++) {
 			if (end >= endBound) {
-				snprintf(reason, sizeof(reason), "no dry far abutment within the drag (searched up to step %d of %d valid steps)",
+				snprintf(reason, sizeof(reason), "no dry far bank within the drag (searched up to step %d of %d valid steps)",
 						endBound - 1, networkTool->validStepCount);
 				return reason;
 			}
@@ -257,25 +288,25 @@ vanillaCheck:
 				snprintf(reason, sizeof(reason), "step %d is already a bridge or tunnel", end);
 				return reason;
 			}
-			const bool dry = !isWaterStep(networkTool, end);
-			if (!(dry && sFarAbutmentClearanceInstalled) && !isStepGoodForBridge(networkTool, end)) {
-				snprintf(reason, sizeof(reason), "an existing network lies within one tile of step %d%s", end, dry ? " (far abutment)" : "");
+			const bool isStub = isShoreStubStep(networkTool, end);
+			if (!(sFarAbutmentClearanceInstalled && isFarAbutmentStep(networkTool, end)) && !isStepGoodForBridge(networkTool, end)) {
+				snprintf(reason, sizeof(reason), "an existing network lies within one tile of step %d", end);
 				return reason;
 			}
-			if (!CheckBridgeStepEdgeTypes(networkTool, end, networkType)) {
+			if (!isStub && !CheckBridgeStepEdgeTypes(networkTool, end, networkType)) {
 				snprintf(reason, sizeof(reason), "the existing network on step %d does not allow a bridge", end);
 				return reason;
 			}
-			if (dry) {
-				if (end >= networkTool->straightStepCount) {
+			if (!isWaterStep(networkTool, end)) {
+				const int32_t abutment = isStub ? end - 1 : end;
+				if (abutment >= networkTool->straightStepCount) {
 					snprintf(reason, sizeof(reason), "the far abutment (step %d) lies beyond the bend of the drag (%d straight steps)",
-							end, networkTool->straightStepCount);
-				} else {
-					snprintf(reason, sizeof(reason), "no bridge type fits steps %d to %d (span %d, before padding to the minimum span); ",
-							start, end, end - start + 1);
-					return reason + describeWaterBridgeTypes(networkTool);
+							abutment, networkTool->straightStepCount);
+					return reason;
 				}
-				return reason;
+				snprintf(reason, sizeof(reason), "no bridge type fits steps %d to %d (span %d, before padding to the minimum span); ",
+						start, abutment, abutment - start + 1);
+				return reason + describeWaterBridgeTypes(networkTool);
 			}
 		}
 	}
@@ -392,13 +423,17 @@ vanillaCheck:
 	}
 }
 
-void BridgePatches::InstallLastTileAbutmentPatch()
+void BridgePatches::InstallShoreAbutmentPatch()
 {
 	Patching::ExpectBytes(SelectBridgeStartAndEnd_ValidStepsBound, {0x8b, 0x57, 0x78, 0x4a, 0x3b, 0xc2});  // mov edx, [edi+0x78]; dec edx; cmp eax, edx
 	Patching::ExpectBytes(SelectBridgeStartAndEnd_LoopValidStepsBound, {0x8b, 0x4f, 0x78, 0x8b, 0xc5, 0x49, 0x3b, 0xc1});  // mov ecx, [edi+0x78]; mov eax, ebp; dec ecx; cmp eax, ecx
+	Patching::ExpectBytes(SelectBridgeStartAndEnd_CheckBridgeStepEdgeTypesCall, {0xe8, 0x65, 0xe5, 0xff, 0xff});  // call CheckBridgeStepEdgeTypes
+	Patching::ExpectBytes(SelectBridgeStartAndEnd_FarAbutmentFound, {0x8b, 0x13, 0x3b, 0x57, 0x74});  // mov edx, [ebx]; cmp edx, [edi+0x74]
 	Patching::PatchByte(SelectBridgeStartAndEnd_DecValidSteps, 0x4a, 0x90);  // dec edx -> nop
 	Patching::PatchByte(SelectBridgeStartAndEnd_LoopDecValidSteps, 0x49, 0x90);  // dec ecx -> nop
-	sLastTileAbutmentInstalled = true;
+	Patching::InstallCallHook(SelectBridgeStartAndEnd_CheckBridgeStepEdgeTypesCall, reinterpret_cast<void(*)(void)>(Hook_SelectBridgeStartAndEnd_CheckBridgeStepEdgeTypes));
+	Patching::InstallHook(SelectBridgeStartAndEnd_FarAbutmentFound, Hook_SelectBridgeStartAndEnd_FarAbutmentFound);
+	sShoreAbutmentInstalled = true;
 }
 
 void BridgePatches::InstallFarAbutmentClearancePatch()
@@ -413,7 +448,6 @@ void BridgePatches::InstallParallelBridgesPatch()
 	Patching::ExpectBytes(IsStepGoodForBridge_GetOccupantsCall, {0xff, 0x92, 0xa0, 0x00, 0x00, 0x00});  // call dword ptr [edx + 0xa0]
 	Patching::InstallCallHook(IsStepGoodForBridge_GetOccupantsCall, Hook_IsStepGoodForBridge_GetOccupants);
 	Patching::OverwriteMemory((void*)(IsStepGoodForBridge_GetOccupantsCall + 5), (uint8_t)0x90);  // pad the 6-byte instruction
-	sParallelBridgesInstalled = true;
 }
 
 void BridgePatches::InstallDebugLog()
