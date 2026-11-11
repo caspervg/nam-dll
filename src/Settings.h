@@ -37,5 +37,6 @@ public:
 	float ghostPreviewGradingOpacity;
 	int ghostPreviewCutColor[3];
 	int ghostPreviewFillColor[3];
+	bool enableUndergroundPlaceholderPatch;
 	bool enableKeyboardShortcuts;
 };

@@ -58,6 +58,7 @@
 #include "PathJumping.h"
 #include "TransitNetworkMapping.h"
 #include "TransportMenuPatch.h"
+#include "UndergroundOccupants.h"
 
 static constexpr uint32_t kNAMDllDirectorID = 0x4AC2AEFF;
 
@@ -223,6 +224,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableDualNetworkTransitPatch, "Dual Network Transit patch", TransitNetworkMapping::Install);
 		InstallWhen(settings.enableTransportMenuPatch, "Transport Menu (Seaport/Airport) patch", TransportMenuPatch::Install);
 		InstallWhen(settings.enableGhostPreviewPatch, "Ghost Preview patch for puzzle pieces", [&settings](){ GhostPreview::Install(settings); });
+		InstallWhen(settings.enableUndergroundPlaceholderPatch, "Underground Placeholder Crash patch", UndergroundOccupants::Install);
 		return overrideNetworkDrag;
 	}
 }

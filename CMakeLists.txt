@@ -41,6 +41,7 @@ set(NAM_SOURCES
     src/TransitAccess.cpp
     src/TransitNetworkMapping.cpp
     src/TransportMenuPatch.cpp
+    src/UndergroundOccupants.cpp
     src/version.rc
 )
 
