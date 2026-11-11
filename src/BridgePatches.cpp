@@ -136,9 +136,48 @@ vanillaCheck:
 	constexpr uint32_t PlaceNetwork_IdentifyBridgeCellsCall = 0x63b9e5;
 	constexpr uint32_t IdentifyBridgeCells_SelectBridgeStartAndEndCall = 0x63298b;
 	constexpr uint32_t kNetworkToolBridgeFilterOffset = 0x364;  // cSC4NetworkORFilter* passed to IsStepGoodForBridge
+	constexpr uint32_t kNetworkToolNetworkTypeInfoOffset = 0x358;  // cSC4NetworkTypeInfo* of the dragged network
+	constexpr uint32_t kNetworkToolWaterBridgeTypesOffset = 0x33c;  // vector<long> of bridge types that work over water
+	constexpr uint32_t kNetworkToolPreferredBridgeOffset = 0x200;  // bridge type chosen in the UI, or -1
+	constexpr uint32_t kNetworkTypeInfoBridgeTypesOffset = 0x30;  // vector<cSC4NetworkBridgeTypeInfo>
+	constexpr uint32_t kBridgeTypeInfoSize = 0x178;
+	constexpr uint32_t kBridgeTypeInfoMinSpanOffset = 0x4;
+	constexpr uint32_t kBridgeTypeInfoMaxSpanOffset = 0x8;
+	constexpr uint32_t kBridgeTypeInfoMinAltitudeOffset = 0xc8;  // minimum estimated elevation above water
+	constexpr uint32_t kBridgeTypeInfoMaxAltitudeOffset = 0xcc;
+
+	template <typename T>
+	T readField(const void* object, uint32_t offset)
+	{
+		return *reinterpret_cast<const T*>(reinterpret_cast<const uint8_t*>(object) + offset);
+	}
+
+	// Lists the bridge types FindBestBridgeType chooses from for a bridge over water.
+	std::string describeWaterBridgeTypes(const cSC4NetworkTool* networkTool)
+	{
+		std::string description;
+		char entry[120];
+		const int32_t preferred = readField<int32_t>(networkTool, kNetworkToolPreferredBridgeOffset);
+		snprintf(entry, sizeof(entry), "preferred type %d;", preferred);
+		description += entry;
+		const auto* const typeInfo = readField<const uint8_t*>(networkTool, kNetworkToolNetworkTypeInfoOffset);
+		const auto* const bridgeTypes = readField<const uint8_t*>(typeInfo, kNetworkTypeInfoBridgeTypesOffset);
+		const auto* const candidates = readField<const int32_t*>(networkTool, kNetworkToolWaterBridgeTypesOffset);
+		const auto* const candidatesEnd = readField<const int32_t*>(networkTool, kNetworkToolWaterBridgeTypesOffset + 4);
+		for (const int32_t* candidate = candidates; candidate != candidatesEnd; candidate++) {
+			const uint8_t* const bridgeType = bridgeTypes + *candidate * kBridgeTypeInfoSize;
+			snprintf(entry, sizeof(entry), " type %d: span %u-%u, altitude %.0f-%.0f;", *candidate,
+					readField<uint32_t>(bridgeType, kBridgeTypeInfoMinSpanOffset),
+					readField<uint32_t>(bridgeType, kBridgeTypeInfoMaxSpanOffset),
+					readField<float>(bridgeType, kBridgeTypeInfoMinAltitudeOffset),
+					readField<float>(bridgeType, kBridgeTypeInfoMaxAltitudeOffset));
+			description += entry;
+		}
+		return description;
+	}
 
 	typedef void (__thiscall* pfn_IdentifyBridgeCells)(cSC4NetworkTool* pThis, int32_t* stepCount, int32_t networkType);
-	typedef bool (__thiscall* pfn_SelectBridgeStartAndEnd)(cSC4NetworkTool* pThis, int32_t firstWaterStep, int32_t* start, int32_t* end, int32_t* bridgeType, float* clearance, int32_t networkType);
+	typedef bool (__thiscall* pfn_SelectBridgeStartAndEnd)(cSC4NetworkTool* pThis, int32_t firstWaterStep, int32_t* start, int32_t* end, int32_t* bridgeType, float* deckHeight, int32_t networkType);
 	typedef bool (__thiscall* pfn_CheckBridgeStepEdgeTypes)(cSC4NetworkTool* pThis, int32_t step, int32_t networkType);
 	const auto IdentifyBridgeCells = reinterpret_cast<pfn_IdentifyBridgeCells>(0x632830);
 	const auto SelectBridgeStartAndEnd = reinterpret_cast<pfn_SelectBridgeStartAndEnd>(0x630570);
@@ -227,7 +266,9 @@ vanillaCheck:
 					snprintf(reason, sizeof(reason), "the far abutment (step %d) lies beyond the bend of the drag (%d straight steps)",
 							end, networkTool->straightStepCount);
 				} else {
-					snprintf(reason, sizeof(reason), "no bridge type fits steps %d to %d (span, height or padding to the minimum span)", start, end);
+					snprintf(reason, sizeof(reason), "no bridge type fits steps %d to %d (span %d, before padding to the minimum span); ",
+							start, end, end - start + 1);
+					return reason + describeWaterBridgeTypes(networkTool);
 				}
 				return reason;
 			}
@@ -245,14 +286,14 @@ vanillaCheck:
 	}
 
 	bool __fastcall Hook_SelectBridgeStartAndEnd(cSC4NetworkTool* pThis, void* edx,
-			int32_t firstWaterStep, int32_t* start, int32_t* end, int32_t* bridgeType, float* clearance, int32_t networkType)
+			int32_t firstWaterStep, int32_t* start, int32_t* end, int32_t* bridgeType, float* deckHeight, int32_t networkType)
 	{
-		const bool result = SelectBridgeStartAndEnd(pThis, firstWaterStep, start, end, bridgeType, clearance, networkType);
+		const bool result = SelectBridgeStartAndEnd(pThis, firstWaterStep, start, end, bridgeType, deckHeight, networkType);
 		sSelectCalled = true;
-		char line[300];
+		char line[2048];
 		if (result && *bridgeType >= 0) {
-			snprintf(line, sizeof(line), "  water from step %d: bridge from step %d to %d, bridge type %d, clearance %.1f m",
-					firstWaterStep, *start, *end, *bridgeType, *clearance);
+			snprintf(line, sizeof(line), "  water from step %d: bridge from step %d to %d, bridge type %d, deck at %.1f m",
+					firstWaterStep, *start, *end, *bridgeType, *deckHeight);
 		} else {
 			snprintf(line, sizeof(line), "  water from step %d: rejected, %s",
 					firstWaterStep, explainRejectedBridge(pThis, firstWaterStep, networkType).c_str());
