@@ -1,8 +1,10 @@
 #include "BridgePatches.h"
+#include "Logger.h"
 #include "Patching.h"
 #include "NetworkStubs.h"
 #include "cISTETerrain.h"
 #include <algorithm>
+#include <string>
 
 // How the network tool places bridges (cSC4NetworkTool, from the Mac binary, verified on Windows):
 //
@@ -19,6 +21,10 @@ namespace
 	// IsStepGoodForBridge(cISC4OccupantFilter*, int x1, int z1, int x2, int z2) (free function),
 	// custom calling convention: occupant manager in esi, arguments on stack, caller cleans up.
 	constexpr uint32_t IsStepGoodForBridge = 0x62fdb0;
+
+	bool sLastTileAbutmentInstalled = false;
+	bool sFarAbutmentClearanceInstalled = false;
+	bool sParallelBridgesInstalled = false;
 
 	// Patch 1: Last-tile abutment
 	//
@@ -120,18 +126,238 @@ vanillaCheck:
 			jmp dword ptr [eax + 0xa0];  // GetOccupantsByStandardCityCells, returns to the original call site
 		}
 	}
+
+	// Debug log
+	//
+	// Wraps IdentifyBridgeCells (called by PlaceNetwork) and SelectBridgeStartAndEnd (called by
+	// IdentifyBridgeCells) to log the dragged steps and the bridges placed on them. When a bridge is
+	// rejected, the checks of SelectBridgeStartAndEnd are repeated to find the first failing one.
+	// Drag previews run this for every mouse move, so a report is only written when it changes.
+	constexpr uint32_t PlaceNetwork_IdentifyBridgeCellsCall = 0x63b9e5;
+	constexpr uint32_t IdentifyBridgeCells_SelectBridgeStartAndEndCall = 0x63298b;
+	constexpr uint32_t kNetworkToolBridgeFilterOffset = 0x364;  // cSC4NetworkORFilter* passed to IsStepGoodForBridge
+
+	typedef void (__thiscall* pfn_IdentifyBridgeCells)(cSC4NetworkTool* pThis, int32_t* stepCount, int32_t networkType);
+	typedef bool (__thiscall* pfn_SelectBridgeStartAndEnd)(cSC4NetworkTool* pThis, int32_t firstWaterStep, int32_t* start, int32_t* end, int32_t* bridgeType, float* clearance, int32_t networkType);
+	typedef bool (__thiscall* pfn_CheckBridgeStepEdgeTypes)(cSC4NetworkTool* pThis, int32_t step, int32_t networkType);
+	const auto IdentifyBridgeCells = reinterpret_cast<pfn_IdentifyBridgeCells>(0x632830);
+	const auto SelectBridgeStartAndEnd = reinterpret_cast<pfn_SelectBridgeStartAndEnd>(0x630570);
+	const auto CheckBridgeStepEdgeTypes = reinterpret_cast<pfn_CheckBridgeStepEdgeTypes>(0x62eb80);
+
+	// Calls IsStepGoodForBridge, which expects the occupant manager in esi. (cdecl)
+	bool NAKED_FUN callIsStepGoodForBridge(intptr_t occupantManager, intptr_t filter, int32_t x1, int32_t z1, int32_t x2, int32_t z2)
+	{
+		__asm {
+			push esi;  // store
+			mov esi, dword ptr [esp + 0x8];  // occupantManager
+			push dword ptr [esp + 0x1c];  // z2
+			push dword ptr [esp + 0x1c];  // x2
+			push dword ptr [esp + 0x1c];  // z1
+			push dword ptr [esp + 0x1c];  // x1
+			push dword ptr [esp + 0x1c];  // filter
+			mov eax, IsStepGoodForBridge;
+			call eax;
+			add esp, 0x14;
+			pop esi;  // restore
+			ret;
+		}
+	}
+
+	bool isWaterStep(const cSC4NetworkTool* networkTool, int32_t step)
+	{
+		const cSC4NetworkTool::tDraggedStep draggedStep = networkTool->draggedSteps[step];
+		for (uint32_t i = draggedStep.firstCellIndex; i <= draggedStep.lastCellIndex; i++) {
+			const SC4Point<uint32_t> cell = networkTool->draggedCells[i];
+			if (networkTool->terrain->CellHasWater(cell.x, cell.y)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool isStepGoodForBridge(const cSC4NetworkTool* networkTool, int32_t step)
+	{
+		const cSC4NetworkTool::tDraggedStep draggedStep = networkTool->draggedSteps[step];
+		const SC4Point<uint32_t> first = networkTool->draggedCells[draggedStep.firstCellIndex];
+		const SC4Point<uint32_t> last = networkTool->draggedCells[draggedStep.lastCellIndex];
+		const intptr_t filter = *reinterpret_cast<const intptr_t*>(reinterpret_cast<const uint8_t*>(networkTool) + kNetworkToolBridgeFilterOffset);
+		return callIsStepGoodForBridge(networkTool->occupantManager, filter, first.x, first.y, last.x, last.y);
+	}
+
+	uint32_t stepType(const cSC4NetworkTool* networkTool, int32_t step)
+	{
+		return networkTool->draggedSteps[step].stepType;
+	}
+
+	// Repeats the checks of SelectBridgeStartAndEnd, including the patches installed here.
+	std::string explainRejectedBridge(cSC4NetworkTool* networkTool, int32_t firstWaterStep, int32_t networkType)
+	{
+		char reason[200];
+		const int32_t start = firstWaterStep - 1;
+		if (stepType(networkTool, start) != 0) {
+			snprintf(reason, sizeof(reason), "near abutment (step %d) is already a bridge or tunnel", start);
+			return reason;
+		}
+		if (!CheckBridgeStepEdgeTypes(networkTool, start, networkType)) {
+			snprintf(reason, sizeof(reason), "the existing network on the near abutment (step %d) does not allow a bridge", start);
+			return reason;
+		}
+		const int32_t endBound = networkTool->validStepCount - (sLastTileAbutmentInstalled ? 0 : 1);
+		for (int32_t end = firstWaterStep + 1; ; end++) {
+			if (end >= endBound) {
+				snprintf(reason, sizeof(reason), "no dry far abutment within the drag (searched up to step %d of %d valid steps)",
+						endBound - 1, networkTool->validStepCount);
+				return reason;
+			}
+			if (stepType(networkTool, end) != 0) {
+				snprintf(reason, sizeof(reason), "step %d is already a bridge or tunnel", end);
+				return reason;
+			}
+			const bool dry = !isWaterStep(networkTool, end);
+			if (!(dry && sFarAbutmentClearanceInstalled) && !isStepGoodForBridge(networkTool, end)) {
+				snprintf(reason, sizeof(reason), "an existing network lies within one tile of step %d%s", end, dry ? " (far abutment)" : "");
+				return reason;
+			}
+			if (!CheckBridgeStepEdgeTypes(networkTool, end, networkType)) {
+				snprintf(reason, sizeof(reason), "the existing network on step %d does not allow a bridge", end);
+				return reason;
+			}
+			if (dry) {
+				if (end >= networkTool->straightStepCount) {
+					snprintf(reason, sizeof(reason), "the far abutment (step %d) lies beyond the bend of the drag (%d straight steps)",
+							end, networkTool->straightStepCount);
+				} else {
+					snprintf(reason, sizeof(reason), "no bridge type fits steps %d to %d (span, height or padding to the minimum span)", start, end);
+				}
+				return reason;
+			}
+		}
+	}
+
+	std::string sReport;
+	std::string sLastReport;
+	bool sSelectCalled = false;
+
+	void appendLine(std::string& report, const char* const line)
+	{
+		report += line;
+		report += '\n';
+	}
+
+	bool __fastcall Hook_SelectBridgeStartAndEnd(cSC4NetworkTool* pThis, void* edx,
+			int32_t firstWaterStep, int32_t* start, int32_t* end, int32_t* bridgeType, float* clearance, int32_t networkType)
+	{
+		const bool result = SelectBridgeStartAndEnd(pThis, firstWaterStep, start, end, bridgeType, clearance, networkType);
+		sSelectCalled = true;
+		char line[300];
+		if (result && *bridgeType >= 0) {
+			snprintf(line, sizeof(line), "  water from step %d: bridge from step %d to %d, bridge type %d, clearance %.1f m",
+					firstWaterStep, *start, *end, *bridgeType, *clearance);
+		} else {
+			snprintf(line, sizeof(line), "  water from step %d: rejected, %s",
+					firstWaterStep, explainRejectedBridge(pThis, firstWaterStep, networkType).c_str());
+		}
+		appendLine(sReport, line);
+		return result;
+	}
+
+	// Why IdentifyBridgeCells did not try to place a bridge at all.
+	void explainSkippedBridges(cSC4NetworkTool* pThis, int32_t checkedSteps, int32_t networkType)
+	{
+		char line[300];
+		if (checkedSteps < 4 || checkedSteps > pThis->straightStepCount) {
+			snprintf(line, sizeof(line), "  no bridges tried: %d steps were checked, but bridges need 4 to %d (or the network has no bridges)",
+					checkedSteps, pThis->straightStepCount);
+			appendLine(sReport, line);
+			return;
+		}
+		for (int32_t i = 0; i < checkedSteps; i++) {
+			if (!isWaterStep(pThis, i)) {
+				continue;
+			}
+			if (i < 2) {
+				snprintf(line, sizeof(line), "  water at step %d, but bridges are only searched from step 2", i);
+				appendLine(sReport, line);
+				continue;
+			}
+			std::string reasons;
+			if (stepType(pThis, i) != 0 || stepType(pThis, i - 1) != 0 || stepType(pThis, i - 2) != 0) {
+				reasons += " already a bridge or tunnel nearby;";
+			}
+			if (!isStepGoodForBridge(pThis, i)) {
+				reasons += " existing network within one tile;";
+			}
+			if (!CheckBridgeStepEdgeTypes(pThis, i, networkType)) {
+				reasons += " existing network does not allow a bridge;";
+			}
+			snprintf(line, sizeof(line), "  water at step %d skipped:%s", i, reasons.c_str());
+			appendLine(sReport, line);
+			return;  // the first water step tells the story
+		}
+	}
+
+	void __fastcall Hook_IdentifyBridgeCells(cSC4NetworkTool* pThis, void* edx, int32_t* stepCount, int32_t networkType)
+	{
+		const int32_t checkedSteps = *stepCount;
+		sReport.clear();
+		sSelectCalled = false;
+		IdentifyBridgeCells(pThis, stepCount, networkType);
+
+		if (pThis->terrain == nullptr) {
+			return;
+		}
+		const int32_t totalSteps = static_cast<int32_t>(pThis->draggedSteps.size());
+		std::string water;
+		std::string bridges;
+		bool hasWater = false;
+		for (int32_t i = 0; i < totalSteps; i++) {
+			const bool wet = isWaterStep(pThis, i);
+			hasWater |= wet;
+			water += wet ? '~' : '.';
+			const uint32_t type = stepType(pThis, i);
+			bridges += type == 1 ? 'B' : type == 2 ? 'T' : '.';
+		}
+		if (!hasWater) {
+			return;  // nothing to do with bridges
+		}
+		if (!sSelectCalled) {
+			explainSkippedBridges(pThis, checkedSteps, networkType);
+		}
+
+		char line[300];
+		std::string report;
+		snprintf(line, sizeof(line), "Bridge drag, network %d: %d steps, %d straight, %d valid, %d checked%s",
+				networkType, totalSteps, pThis->straightStepCount, pThis->validStepCount, checkedSteps,
+				*stepCount < checkedSteps ? " -> drag rejected" : "");
+		appendLine(report, line);
+		appendLine(report, ("  water:   " + water).c_str());
+		appendLine(report, ("  bridges: " + bridges).c_str());
+		report += sReport;
+
+		if (report != sLastReport) {
+			Logger& logger = Logger::GetInstance();
+			size_t begin = 0;
+			for (size_t newline = report.find('\n'); newline != std::string::npos; newline = report.find('\n', begin)) {
+				logger.WriteLine(LogLevel::Info, report.substr(begin, newline - begin).c_str());
+				begin = newline + 1;
+			}
+			sLastReport = std::move(report);
+		}
+	}
 }
 
 void BridgePatches::InstallLastTileAbutmentPatch()
 {
 	Patching::ExpectBytes(SelectBridgeStartAndEnd_ValidStepsBound, {0x8b, 0x57, 0x78, 0x4a, 0x3b, 0xc2});
 	Patching::PatchByte(SelectBridgeStartAndEnd_DecValidSteps, 0x4a, 0x90);  // dec edx -> nop
+	sLastTileAbutmentInstalled = true;
 }
 
 void BridgePatches::InstallFarAbutmentClearancePatch()
 {
 	Patching::ExpectBytes(SelectBridgeStartAndEnd_IsStepGoodForBridgeCall, {0xe8, 0xa7, 0xf7, 0xff, 0xff});  // call IsStepGoodForBridge
 	Patching::InstallCallHook(SelectBridgeStartAndEnd_IsStepGoodForBridgeCall, Hook_SelectBridgeStartAndEnd_IsStepGoodForBridge);
+	sFarAbutmentClearanceInstalled = true;
 }
 
 void BridgePatches::InstallParallelBridgesPatch()
@@ -139,4 +365,13 @@ void BridgePatches::InstallParallelBridgesPatch()
 	Patching::ExpectBytes(IsStepGoodForBridge_GetOccupantsCall, {0xff, 0x92, 0xa0, 0x00, 0x00, 0x00});  // call dword ptr [edx + 0xa0]
 	Patching::InstallCallHook(IsStepGoodForBridge_GetOccupantsCall, Hook_IsStepGoodForBridge_GetOccupants);
 	Patching::OverwriteMemory((void*)(IsStepGoodForBridge_GetOccupantsCall + 5), (uint8_t)0x90);  // pad the 6-byte instruction
+	sParallelBridgesInstalled = true;
+}
+
+void BridgePatches::InstallDebugLog()
+{
+	Patching::ExpectBytes(PlaceNetwork_IdentifyBridgeCellsCall, {0xe8, 0x46, 0x6e, 0xff, 0xff});  // call IdentifyBridgeCells
+	Patching::ExpectBytes(IdentifyBridgeCells_SelectBridgeStartAndEndCall, {0xe8, 0xe0, 0xdb, 0xff, 0xff});  // call SelectBridgeStartAndEnd
+	Patching::InstallCallHook(PlaceNetwork_IdentifyBridgeCellsCall, reinterpret_cast<void(*)(void)>(Hook_IdentifyBridgeCells));
+	Patching::InstallCallHook(IdentifyBridgeCells_SelectBridgeStartAndEndCall, reinterpret_cast<void(*)(void)>(Hook_SelectBridgeStartAndEnd));
 }

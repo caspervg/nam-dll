@@ -229,6 +229,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableBridgeLastTileAbutmentPatch, "Bridge Last-Tile Abutment patch", BridgePatches::InstallLastTileAbutmentPatch);
 		InstallWhen(settings.enableBridgeFarAbutmentClearancePatch, "Bridge Far Abutment Clearance patch", BridgePatches::InstallFarAbutmentClearancePatch);
 		InstallWhen(settings.enableParallelBridgesPatch, "Parallel Bridges patch (experimental)", BridgePatches::InstallParallelBridgesPatch);
+		InstallWhen(settings.enableBridgeDebugLog, "Bridge debug log", BridgePatches::InstallDebugLog);
 		return overrideNetworkDrag;
 	}
 }

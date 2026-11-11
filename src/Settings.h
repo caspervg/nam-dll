@@ -41,5 +41,6 @@ public:
 	bool enableBridgeLastTileAbutmentPatch;
 	bool enableBridgeFarAbutmentClearancePatch;
 	bool enableParallelBridgesPatch;
+	bool enableBridgeDebugLog;
 	bool enableKeyboardShortcuts;
 };
