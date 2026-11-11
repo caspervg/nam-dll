@@ -19,7 +19,7 @@ public:
 	bool enableVerticalPathSeparationPatch;
 	bool enableDualNetworkTransitPatch;
 	bool enableTransportMenuPatch;
-	bool enableBridgeLastTileAbutmentPatch;
+	bool enableBridgeShoreAbutmentPatch;
 	bool enableBridgeFarAbutmentClearancePatch;
 	bool enableParallelBridgesPatch;
 	bool enableBridgeDebugLog;
