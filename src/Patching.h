@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <vector>
+#include <initializer_list>
 
 #ifdef __clang__
 #define NAKED_FUN __attribute__((naked))
@@ -43,6 +44,8 @@ namespace Patching
 	void OverwriteMemory(void* address, uint8_t newValue);
 	void OverwriteMemory(void* address, uint32_t newValue);
 	void PatchImmediate16(uint32_t address, uint16_t expectedValue, uint16_t newValue);
+	void ExpectBytes(uint32_t address, std::initializer_list<uint8_t> expectedBytes);
+	void PatchByte(uint32_t address, uint8_t expectedValue, uint8_t newValue);
 	void PatchImmediate32(uint32_t address, uint32_t expectedValue, uint32_t newValue);
 	void PatchPushImmediate32(uint32_t address, uint32_t expectedValue, uint32_t newValue);
 	void PatchTestEaxImmediate32(uint32_t address, uint32_t expectedValue, uint32_t newValue);

@@ -38,5 +38,8 @@ public:
 	int ghostPreviewCutColor[3];
 	int ghostPreviewFillColor[3];
 	bool enableUndergroundPlaceholderPatch;
+	bool enableBridgeLastTileAbutmentPatch;
+	bool enableBridgeFarAbutmentClearancePatch;
+	bool enableParallelBridgesPatch;
 	bool enableKeyboardShortcuts;
 };

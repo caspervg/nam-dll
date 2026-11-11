@@ -68,6 +68,33 @@ void Patching::PatchImmediate16(const uint32_t address, const uint16_t expectedV
 	VirtualProtect(immediate, sizeof(newValue), oldProtect, &oldProtect);
 }
 
+void Patching::ExpectBytes(const uint32_t address, const std::initializer_list<uint8_t> expectedBytes)
+{
+	const uint8_t* const code = reinterpret_cast<uint8_t*>(address);
+	THROW_HR_IF(E_FAIL, std::memcmp(code, expectedBytes.begin(), expectedBytes.size()) != 0);
+}
+
+void Patching::PatchByte(const uint32_t address, const uint8_t expectedValue, const uint8_t newValue)
+{
+	auto* const value = reinterpret_cast<uint8_t*>(address);
+	if (*value == newValue)
+	{
+		return;
+	}
+
+	THROW_HR_IF(E_FAIL, *value != expectedValue);
+
+	DWORD oldProtect;
+	THROW_IF_WIN32_BOOL_FALSE(VirtualProtect(
+		value,
+		sizeof(newValue),
+		PAGE_EXECUTE_READWRITE,
+		&oldProtect));
+
+	*value = newValue;
+	VirtualProtect(value, sizeof(newValue), oldProtect, &oldProtect);
+}
+
 void Patching::PatchImmediate32(const uint32_t address, const uint32_t expectedValue, const uint32_t newValue)
 {
 	auto* const immediate = reinterpret_cast<uint32_t*>(address);

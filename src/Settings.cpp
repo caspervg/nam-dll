@@ -110,6 +110,9 @@ Settings::Settings() :
 	ghostPreviewCutColor{239, 28, 36},  // NAM hole digger red
 	ghostPreviewFillColor{63, 73, 206},  // NAM raiser blue
 	enableUndergroundPlaceholderPatch(true),
+	enableBridgeLastTileAbutmentPatch(true),
+	enableBridgeFarAbutmentClearancePatch(true),
+	enableParallelBridgesPatch(false),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -187,6 +190,9 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readColorProp("GhostPreviewCutColor", ghostPreviewCutColor);
 			readColorProp("GhostPreviewFillColor", ghostPreviewFillColor);
 			readBoolProp("EnableUndergroundPlaceholderPatch", enableUndergroundPlaceholderPatch);
+			readBoolProp("EnableBridgeLastTileAbutmentPatch", enableBridgeLastTileAbutmentPatch);
+			readBoolProp("EnableBridgeFarAbutmentClearancePatch", enableBridgeFarAbutmentClearancePatch);
+			readBoolProp("EnableParallelBridgesPatch", enableParallelBridgesPatch);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}
