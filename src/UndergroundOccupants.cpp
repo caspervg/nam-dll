@@ -27,6 +27,7 @@ namespace
 
 	constexpr uint32_t kPipeNetworkType = 4;
 	constexpr uint32_t kSubwayNetworkType = 7;
+	constexpr uint32_t kNetworkTypesMask = 0x1fff;  // one bit per network type, in the low bits of the network flags
 
 	// answered by cSC4UndergroundOccupant::QueryInterface (0x65a080), which the subway and pipe occupants derive from
 	constexpr uint32_t kUndergroundOccupantIID = 0x4a10afc2;
@@ -42,16 +43,18 @@ namespace
 		uint32_t cellX = 0;
 		uint32_t cellZ = 0;
 		networkOccupant->GetOccupiedCell(cellX, cellZ);
+		const uint32_t flags = networkOccupant->GetNetworkFlag();
 		Logger::GetInstance().WriteLineFormatted(
 			LogLevel::Info,
 			"Skipped a %s occupant at cell (%u, %u) that is not an underground occupant while updating the underground "
-			"after a terrain change (piece 0x%08X, networks 0x%04X). Such occupants are usually left behind by the "
-			"Network Eraser, and would otherwise crash the game.",
+			"after a terrain change (model 0x%08X, networks 0x%04X, flags 0x%08X). Such occupants are usually left "
+			"behind by the Network Eraser, and would otherwise crash the game.",
 			networkType == kPipeNetworkType ? "Pipe" : "Subway",
 			cellX,
 			cellZ,
-			networkOccupant->PieceId(),
-			networkOccupant->GetNetworkFlag());
+			networkOccupant->PieceId(),  // the model of a model-based occupant
+			flags & kNetworkTypesMask,
+			flags);
 		return false;
 	}
 
