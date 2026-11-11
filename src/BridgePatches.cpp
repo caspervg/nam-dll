@@ -34,10 +34,15 @@ namespace
 	//   cmp eax, edx                     ; current step < validSteps - 1
 	// so the drag has to extend one tile beyond the far abutment, otherwise the whole drag fails.
 	// The near abutment has no such requirement as it may be a partially submerged shore tile.
-	// Removing the `dec` matches the bound that PadStepsToMakeMinBridgeSpan (0x62ecd0) already uses
+	// Removing the `dec`s matches the bound that PadStepsToMakeMinBridgeSpan (0x62ecd0) already uses
 	// when it extends a bridge forwards, so bridges ending on the last dragged step already occur.
+	//
+	// MSVC rotated the loop, so the bound appears twice: before the loop, for the first step after
+	// the water starts, and at the bottom of the loop, for every following step.
 	constexpr uint32_t SelectBridgeStartAndEnd_ValidStepsBound = 0x6305af;
 	constexpr uint32_t SelectBridgeStartAndEnd_DecValidSteps = 0x6305b2;
+	constexpr uint32_t SelectBridgeStartAndEnd_LoopValidStepsBound = 0x6306ad;
+	constexpr uint32_t SelectBridgeStartAndEnd_LoopDecValidSteps = 0x6306b2;
 
 	// Patch 2: Far abutment clearance
 	//
@@ -389,8 +394,10 @@ vanillaCheck:
 
 void BridgePatches::InstallLastTileAbutmentPatch()
 {
-	Patching::ExpectBytes(SelectBridgeStartAndEnd_ValidStepsBound, {0x8b, 0x57, 0x78, 0x4a, 0x3b, 0xc2});
+	Patching::ExpectBytes(SelectBridgeStartAndEnd_ValidStepsBound, {0x8b, 0x57, 0x78, 0x4a, 0x3b, 0xc2});  // mov edx, [edi+0x78]; dec edx; cmp eax, edx
+	Patching::ExpectBytes(SelectBridgeStartAndEnd_LoopValidStepsBound, {0x8b, 0x4f, 0x78, 0x8b, 0xc5, 0x49, 0x3b, 0xc1});  // mov ecx, [edi+0x78]; mov eax, ebp; dec ecx; cmp eax, ecx
 	Patching::PatchByte(SelectBridgeStartAndEnd_DecValidSteps, 0x4a, 0x90);  // dec edx -> nop
+	Patching::PatchByte(SelectBridgeStartAndEnd_LoopDecValidSteps, 0x49, 0x90);  // dec ecx -> nop
 	sLastTileAbutmentInstalled = true;
 }
 
