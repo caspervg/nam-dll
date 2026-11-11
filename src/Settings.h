@@ -19,5 +19,8 @@ public:
 	bool enableVerticalPathSeparationPatch;
 	bool enableDualNetworkTransitPatch;
 	bool enableTransportMenuPatch;
+	bool enableBridgeLastTileAbutmentPatch;
+	bool enableBridgeFarAbutmentClearancePatch;
+	bool enableParallelBridgesPatch;
 	bool enableKeyboardShortcuts;
 };
