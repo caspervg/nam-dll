@@ -1,5 +1,6 @@
 #include "SavedTunnelScanner.h"
 
+#include "DiagonalTunnels.h"
 #include "GameAccess.h"
 #include "PathStitcher.h"
 #include "PieceInserter.h"
@@ -31,6 +32,7 @@ namespace TunnelPortal::SavedTunnelScanner
 		bool TryGetTunnelAtEndpoint(
 			Endpoint& endpoint,
 			uint8_t& directionOut,
+			uint8_t& surfaceDirectionOut,
 			cRZAutoRefCount<cIGZUnknown>& tunnelOut)
 		{
 			if (!GameAccess::FindNetworkAtTile(endpoint.x, endpoint.z, endpoint.networkType))
@@ -45,6 +47,14 @@ namespace TunnelPortal::SavedTunnelScanner
 			cISC4NetworkOccupant* occupant = cellInfo ? cellInfo->networkOccupant : nullptr;
 			if (occupant && occupant->QueryInterface(kNetworkTunnelOccupantID, tunnelOut.AsPPVoid()) && tunnelOut)
 			{
+				// Diagonal drag portals carry their facing in piece ID and
+				// rotation; their diagonal surface edges would confuse the
+				// orthogonal surface-approach inference below.
+				if (DiagonalTunnels::TryGetPortalFacing(occupant, directionOut, surfaceDirectionOut))
+				{
+					return true;
+				}
+
 				// The placed occupant stores the exemplar/model rotation, which is
 				// one quarter-turn ahead of InsertTunnelPiece's direction code for
 				// the native tunnel arrays. Prefer the surviving surface approach
@@ -55,6 +65,7 @@ namespace TunnelPortal::SavedTunnelScanner
 					cellInfo,
 					endpoint.networkType,
 					directionOut);
+				surfaceDirectionOut = static_cast<uint8_t>((directionOut + 2) & 3);
 				return true;
 			}
 
@@ -99,18 +110,24 @@ namespace TunnelPortal::SavedTunnelScanner
 
 				uint8_t firstDirection = 0xFF;
 				uint8_t secondDirection = 0xFF;
+				uint8_t firstSurfaceDirection = 0xFF;
+				uint8_t secondSurfaceDirection = 0xFF;
 				cRZAutoRefCount<cIGZUnknown> firstTunnel;
 				cRZAutoRefCount<cIGZUnknown> secondTunnel;
-				if (!TryGetTunnelAtEndpoint(first, firstDirection, firstTunnel)
-					|| !TryGetTunnelAtEndpoint(second, secondDirection, secondTunnel))
+				if (!TryGetTunnelAtEndpoint(first, firstDirection, firstSurfaceDirection, firstTunnel)
+					|| !TryGetTunnelAtEndpoint(second, secondDirection, secondSurfaceDirection, secondTunnel))
 				{
 					continue;
 				}
 
 				const uint8_t firstVectorDirection = Geometry::InferTunnelPieceDirection(first, second);
 				const uint8_t secondVectorDirection = Geometry::InferTunnelPieceDirection(second, first);
+				const bool hasPerpendicularSurface =
+					firstSurfaceDirection != ((firstDirection + 2) & 3)
+						|| secondSurfaceDirection != ((secondDirection + 2) & 3);
 				const bool requiresCustomPathStitch =
-					firstDirection != firstVectorDirection
+					hasPerpendicularSurface
+						|| firstDirection != firstVectorDirection
 						|| secondDirection != secondVectorDirection;
 				const bool requiresAvenuePathKeyResolution =
 					Geometry::IsTwoTileNetwork(first.networkType)
@@ -136,10 +153,14 @@ namespace TunnelPortal::SavedTunnelScanner
 						Geometry::TunnelPieceDirectionToPathDirection(secondDirection);
 					const uint16_t firstPeerLookup = requiresAvenuePathKeyResolution
 						? PathStitcher::kAutomaticPeerPathLookup
-						: Geometry::PortalExitPathKeyLowWord(secondPathDirection);
+						: Geometry::PortalExitPathKeyLowWord(
+							secondPathDirection,
+							Geometry::TunnelPieceDirectionToPathDirection(secondSurfaceDirection));
 					const uint16_t secondPeerLookup = requiresAvenuePathKeyResolution
 						? PathStitcher::kAutomaticPeerPathLookup
-						: Geometry::PortalExitPathKeyLowWord(firstPathDirection);
+						: Geometry::PortalExitPathKeyLowWord(
+							firstPathDirection,
+							Geometry::TunnelPieceDirectionToPathDirection(firstSurfaceDirection));
 					PathStitcher::RefreshTunnelPathInfo(
 						firstTunnel,
 						secondTunnel,

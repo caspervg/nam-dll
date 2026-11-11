@@ -11,9 +11,14 @@
 //   RouteEdgeFixes  0x006D9ACF  FindPath         tunnel AddTripNode call
 //                   0x00718215  FloodSubnetwork  tunnel GetNetworkInfo call
 //   TerrainPinning  0x0063BB6B  PlaceNetwork     CanTilesBeSupportedOnTerrain call
+//   DiagonalTunnels 0x0063BCBB  PlaceNetwork     InsertTunnelPieces call (separate setting)
+//                   0x0063B977  PlaceNetwork     IdentifyTunnelCells call
+//   Debug           0x004AE6C6  0x004AE4E0       InitializeTunnelPaths call (call-stack trace)
 
 #include "TunnelPortalTool.h"
 
+#include "tunnelportal/Debug.h"
+#include "tunnelportal/DiagonalTunnels.h"
 #include "tunnelportal/GameAccess.h"
 #include "tunnelportal/PathStitcher.h"
 #include "tunnelportal/RouteEdgeFixes.h"
@@ -37,6 +42,13 @@ void TunnelPortalTool::Install()
 	SavedTunnelScanner::InstallRescanCallback();
 	RouteEdgeFixes::InstallHooks();
 	TerrainPinning::InstallHooks();
+}
+
+void TunnelPortalTool::InstallDiagonalTunnels()
+{
+	TunnelPortal::DiagonalTunnels::InstallHooks();
+	// Diagnostic: logs who triggers native tunnel re-stitching.
+	TunnelPortal::Debug::InstallInitializeTunnelPathsTrace();
 }
 
 void TunnelPortalTool::RefreshCity()

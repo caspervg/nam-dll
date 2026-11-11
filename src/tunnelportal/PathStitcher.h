@@ -36,6 +36,21 @@ namespace TunnelPortal::PathStitcher
 		uint16_t peerPathKeyLowWord = 0xFFFF,
 		uint8_t peerMouthPathDirection = 0xFF);
 
+	// Supplies overrides for a native MakeTunnelPaths call that runs outside
+	// RefreshTunnelPathInfo, e.g. cSC4TrafficNetworkMap::InitializeTunnelPaths
+	// (0x004adf50), which re-stitches every tunnel with the coordinate-derived
+	// direction. Given the occupant being stitched to (`otherEnd`), returns
+	// false to keep native behaviour, or true with the occupant being stitched
+	// (`selfOut`, not AddRef'd) and the arguments RefreshTunnelPathInfo would
+	// take for this pair.
+	using AutomaticOverrideResolver = bool (*)(
+		cIGZUnknown* otherEnd,
+		cIGZUnknown*& selfOut,
+		uint8_t& selfLookupPathDirection,
+		uint16_t& peerPathKeyLowWord,
+		uint8_t& peerMouthPathDirection);
+	void SetAutomaticOverrideResolver(AutomaticOverrideResolver resolver);
+
 	// Installs the two MakeTunnelPaths inline hooks.
 	void InstallHooks();
 }

@@ -56,6 +56,11 @@ namespace TunnelPortal::Geometry
 	// surface-side edge and skip the peer portal tile entirely.
 	uint16_t PortalExitPathKeyLowWord(uint8_t pathDirection);
 
+	// Same key for a portal whose surface side is not opposite its mouth, such
+	// as a diagonal portal (mouth N, surface W). Entry byte is the mouth side,
+	// exit byte the surface side, both in path-direction numbering.
+	uint16_t PortalExitPathKeyLowWord(uint8_t mouthPathDirection, uint8_t surfacePathDirection);
+
 	// Edge-flag bit a surface tile must expose to feed a portal with this
 	// piece rotation (i.e. the edge on the side the portal mouth opens toward).
 	uint32_t SurfaceApproachEdge(uint8_t tunnelPieceDirection);

@@ -197,7 +197,11 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
 		InstallWhen(settings.enableDirtRoadAccessPatch, "DirtRoad/RHW Access patch", DirtRoadAccess::Install);
 		InstallWhen(settings.enableTransitAccessPatch, "Transit Access patch", TransitAccess::Install);
-		InstallWhen(settings.enableExperimentalTunnelPortalTool, "Tunnel Portal Tool", TunnelPortalTool::Install);
+		InstallWhen(
+			settings.enableExperimentalTunnelPortalTool || settings.enableExperimentalDiagonalTunnels,
+			"Tunnel Portal hooks",
+			TunnelPortalTool::Install);
+		InstallWhen(settings.enableExperimentalDiagonalTunnels, "Draggable Diagonal Tunnels patch", TunnelPortalTool::InstallDiagonalTunnels);
 	}
 }
 
@@ -304,7 +308,7 @@ public:
 	void PostCityInit(cIGZMessage2Standard* pStandardMessage)
 	{
 		RegisterDllVersionInLua();
-		if (settings.enableExperimentalTunnelPortalTool)
+		if (settings.enableExperimentalTunnelPortalTool || settings.enableExperimentalDiagonalTunnels)
 		{
 			TunnelPortalTool::RefreshCity();
 		}

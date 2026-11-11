@@ -52,6 +52,21 @@ namespace TunnelPortal::Game
 	inline const pfn_SetOtherEndOccupant SetOtherEndOccupant =
 		reinterpret_cast<pfn_SetOtherEndOccupant>(0x00647530);
 
+	// cSC4NetworkTunnelOccupant::GetOtherEndOccupant
+	// The occupant at the far side of the tunnel (this + 0x1d0), not AddRef'd.
+	using pfn_GetOtherEndOccupant = cISC4NetworkOccupant* (__thiscall*)(cIGZUnknown* tunnel);
+	inline const pfn_GetOtherEndOccupant GetOtherEndOccupant =
+		reinterpret_cast<pfn_GetOtherEndOccupant>(0x00647570);
+
+	// cSC4TrafficNetworkMap::InitializeTunnelPaths
+	// Walks every network occupant and, for each tunnel with a linked other
+	// end, re-runs pathInfo->InitTunnelPath (MakeTunnelPaths) without any
+	// custom facing context. Its only caller is 0x004ae4e0, slot 0 of the
+	// vtable at 0x00a8fee4.
+	using pfn_InitializeTunnelPaths = void (__thiscall*)(void* trafficNetworkMap);
+	inline const pfn_InitializeTunnelPaths InitializeTunnelPaths =
+		reinterpret_cast<pfn_InitializeTunnelPaths>(0x004adf50);
+
 	// cSC4TrafficSimulator::DoTunnelChanged
 	// Adds or removes a portal from the simulator's tunnel registry.
 	using pfn_DoTunnelChanged = void (__thiscall*)(
@@ -222,6 +237,31 @@ namespace TunnelPortal::Game
 
 	namespace Site
 	{
+		// Inside cSC4NetworkTool::PlaceNetwork (0x0063b830): the only call to
+		// cSC4NetworkTool::InsertTunnelPieces (0x006287d0). In placing mode the
+		// callee returns on the first tunnel whose portals share neither a row
+		// nor a column, so diagonal drags get no tunnel. Redirected so diagonal
+		// tunnels can be placed; the original stays callable through
+		// cSC4NetworkTool::InsertTunnelPieces.
+		constexpr uint32_t kPlaceNetworkInsertTunnelPiecesCall = 0x0063bcbb;
+		constexpr uint32_t kPlaceNetworkInsertTunnelPiecesCallRel = 0xFFFECB10;
+
+		// Inside cSC4NetworkTool::PlaceNetwork: the only call to
+		// cSC4NetworkTool::IdentifyTunnelCells (0x00639490), after
+		// "lea eax,[esp+0x48]; push eax; mov ecx,esi". The callee (and
+		// FindTunnelEnd, 0x00638770) only considers steps below
+		// numStraightSteps, so the 45 degree part of a drag never gets a
+		// tunnel. Redirected to detect tunnels there too.
+		constexpr uint32_t kPlaceNetworkIdentifyTunnelCellsCall = 0x0063b977;
+		constexpr uint32_t kPlaceNetworkIdentifyTunnelCellsCallRel = 0xFFFFDB14;
+
+		// Inside 0x004ae4e0: the only call to InitializeTunnelPaths, after
+		// "mov ecx,esi". Redirected for a diagnostic call-stack trace; the
+		// function's own prologue cannot take a 6-byte inline hook (its sixth
+		// byte starts a mov).
+		constexpr uint32_t kInitializeTunnelPathsCall = 0x004ae6c6;
+		constexpr uint32_t kInitializeTunnelPathsCallRel = 0xFFFFF885;
+
 		// Inside cSC4PathInfo::MakeTunnelPaths (0x0053FD70): the 6-byte
 		// "call [edx+0xC4]" right after the direction-assignment branches.
 		// Hooked to override the direction the function derived from cell

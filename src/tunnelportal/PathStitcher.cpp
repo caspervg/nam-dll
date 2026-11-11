@@ -43,6 +43,11 @@ namespace TunnelPortal::PathStitcher
 		uint32_t sPeerPathUnresolvedKeyCount = 0;
 		std::array<uint32_t, 4> sPeerPathUnresolvedOriginalKeys{};
 
+		// True while RefreshTunnelPathInfo drives MakeTunnelPaths with its own
+		// overrides; otherwise the automatic resolver decides.
+		bool sExplicitRefreshActive = false;
+		AutomaticOverrideResolver sAutomaticOverrideResolver = nullptr;
+
 		// Trampoline pointers for the naked stubs, set by InstallHooks.
 		void* sInitTunnelPathTrampolinePtr = nullptr;
 		void* sPeerPathLookupTrampolinePtr = nullptr;
@@ -184,9 +189,52 @@ namespace TunnelPortal::PathStitcher
 		//   eax = clobbered freely by our mov al    → overwritten by the call's return value
 		//   esi = otherEnd (preserved, not touched)
 		//   edi = pathInfo/this (preserved, not touched)
+		// Called from Hook_InitTunnelPath for every MakeTunnelPaths call that
+		// RefreshTunnelPathInfo did not start: resets the overrides, then lets
+		// the resolver fill them for portal pairs native stitching gets wrong.
+		void __stdcall ApplyAutomaticOverrides(cIGZUnknown* otherEnd)
+		{
+			sCustomPortalFacingOverride = 0xFF;
+			sCustomPeerPathLookupKeyLowWord = 0xFFFF;
+			sCustomPeerMouthPathDirection = 0xFF;
+			sCustomSelfPathInfo = nullptr;
+			sCustomPeerPathInfo = nullptr;
+
+			cIGZUnknown* self = nullptr;
+			uint8_t selfLookupPathDirection = 0xFF;
+			uint16_t peerPathKeyLowWord = 0xFFFF;
+			uint8_t peerMouthPathDirection = 0xFF;
+			if (sAutomaticOverrideResolver
+				&& otherEnd
+				&& sAutomaticOverrideResolver(
+					otherEnd,
+					self,
+					selfLookupPathDirection,
+					peerPathKeyLowWord,
+					peerMouthPathDirection)
+				&& self)
+			{
+				sCustomPortalFacingOverride = selfLookupPathDirection;
+				sCustomPeerPathLookupKeyLowWord = peerPathKeyLowWord;
+				sCustomPeerMouthPathDirection = peerMouthPathDirection;
+				sCustomSelfPathInfo = Game::GetTunnelPathInfo(self);
+				sCustomPeerPathInfo = Game::GetTunnelPathInfo(otherEnd);
+			}
+		}
+
+		// Native callers (InitializeTunnelPaths) pass network occupants rather
+		// than tunnel interfaces; both QueryInterface to either, and both carry
+		// GetPathInfo at vtable +0xC4. esi holds otherEnd here (see above).
 		NAKED_FUN void Hook_InitTunnelPath()
 		{
 			__asm {
+				cmp  byte ptr [sExplicitRefreshActive], 0
+				jne  apply
+				pushad
+				push esi
+				call ApplyAutomaticOverrides
+				popad
+			apply:
 				cmp  byte ptr [sCustomPortalFacingOverride], 0xFF
 				je   done
 				mov  al, byte ptr [sCustomPortalFacingOverride]
@@ -274,7 +322,9 @@ namespace TunnelPortal::PathStitcher
 		sPeerPathRemappedUniqueKeyCount = 0;
 		sPeerPathUnresolvedKeyCount = 0;
 		sPeerPathUnresolvedOriginalKeys.fill(0);
+		sExplicitRefreshActive = true;
 		Game::InitTunnelPath(pathInfo, self, otherEnd);
+		sExplicitRefreshActive = false;
 		if (peerPathKeyLowWord != 0xFFFF)
 		{
 			Debug::LogPathRefresh(
@@ -291,6 +341,11 @@ namespace TunnelPortal::PathStitcher
 		sCustomSelfPathInfo = nullptr;
 		sCustomPeerPathInfo = nullptr;
 		return true;
+	}
+
+	void SetAutomaticOverrideResolver(AutomaticOverrideResolver resolver)
+	{
+		sAutomaticOverrideResolver = resolver;
 	}
 
 	void InstallHooks()

@@ -74,6 +74,11 @@ namespace TunnelPortal::Geometry
 		return static_cast<uint16_t>((direction << 8) | (direction ^ 2));
 	}
 
+	uint16_t PortalExitPathKeyLowWord(uint8_t mouthPathDirection, uint8_t surfacePathDirection)
+	{
+		return static_cast<uint16_t>(((mouthPathDirection & 3) << 8) | (surfacePathDirection & 3));
+	}
+
 	uint32_t SurfaceApproachEdge(uint8_t tunnelPieceDirection)
 	{
 		return kSurfaceApproachEdge[tunnelPieceDirection & 3];

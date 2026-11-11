@@ -47,6 +47,17 @@ namespace TunnelPortal::Debug
 		uint8_t firstDirection,
 		uint8_t secondDirection);
 
+	// Logs the call chain that led here as return addresses into the game's
+	// code. SC4 omits frame pointers, so this scans the stack upward from
+	// `stackPosition` and keeps values that point just after a call
+	// instruction in the executable's code section. Expect the occasional
+	// stale return address from an earlier call; resolve them with Ghidra.
+	void LogCallStack(const char* label, const void* stackPosition);
+
+	// Redirects the only call to cSC4TrafficNetworkMap::InitializeTunnelPaths
+	// so every run logs its call stack before running unchanged.
+	void InstallInitializeTunnelPathsTrace();
+
 	// Peer path-key resolution stats from one RefreshTunnelPathInfo call.
 	void LogPathRefresh(
 		uint8_t selfLookupPathDirection,

@@ -14,7 +14,8 @@ Settings::Settings() :
 	enableDirtRoadAccessPatch(true),
 	enableTransitAccessPatch(true),
 	enableKeyboardShortcuts(true),
-	enableExperimentalTunnelPortalTool(false) {};
+	enableExperimentalTunnelPortalTool(false),
+	enableExperimentalDiagonalTunnels(false) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
 {
@@ -38,6 +39,7 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableDirtRoadAccessPatch", enableDirtRoadAccessPatch);
 			readBoolProp("EnableTransitAccessPatch", enableTransitAccessPatch);
 			readBoolProp("EnableExperimentalTunnelPortalTool", enableExperimentalTunnelPortalTool);
+			readBoolProp("EnableExperimentalDiagonalTunnels", enableExperimentalDiagonalTunnels);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}

@@ -8,6 +8,8 @@
 #include "SC4Rect.h"
 #include "cISC4City.h"
 
+class cISTETerrain;
+
 // The RESERVED macro provides names for reserved or unknown struct fields
 #define _CONCATNAM(x,y) x ## y
 #define _EXPANDNAM(x,y) _CONCATNAM(x,y)
@@ -26,7 +28,9 @@ class cSC4NetworkCellInfo
 		uint8_t RESERVED[0x8];
 		uint32_t edgesPerNetwork[13];
 		uint32_t edgeFlagsCombined;  // bitwise-or in case of 2 networks
-		uint8_t RESERVED[0x03];
+		uint8_t RESERVED[0x01];
+		bool isTunnelEndpoint;  // set by InsertTunnelPieces before InsertTunnelPiece
+		uint8_t RESERVED[0x01];
 		bool isImmovable;
 		uint8_t RESERVED[2];
 		bool isNetworkLot;
@@ -35,6 +39,7 @@ class cSC4NetworkCellInfo
 		int32_t idxInCellsBuffer;
 };
 static_assert(offsetof(cSC4NetworkCellInfo, edgesPerNetwork) == 0x18);
+static_assert(offsetof(cSC4NetworkCellInfo, isTunnelEndpoint) == 0x51);
 static_assert(offsetof(cSC4NetworkCellInfo, isImmovable) == 0x53);
 static_assert(offsetof(cSC4NetworkCellInfo, isNetworkLot) == 0x56);
 static_assert(offsetof(cSC4NetworkCellInfo, idxInCellsBuffer) == 0xb8);
@@ -87,13 +92,25 @@ class cSC4NetworkTool
 		};
 		static_assert(sizeof(tCrossSection) == 0x8);
 
+		// One step along the drag: an inclusive range of draggedCells across the
+		// drag axis. On a 45 degree drag a step holds both cells of the zigzag.
 		struct tDraggedStep
 		{
-			uint8_t RESERVED[4];
-			uint32_t draggedCellsIndex;
-			uint32_t stepType;  // 0: regular/non-immovable, 1: bridge, 2: tunnel, 3: reserved
+			uint32_t firstDraggedCellsIndex;
+			uint32_t lastDraggedCellsIndex;
+			uint32_t stepType;  // 0: regular/non-immovable, 1: bridge, 2: tunnel portal, 3: hidden tunnel
 		};
 		static_assert(sizeof(tDraggedStep) == 0xc);
+
+		// Pushed by IdentifyTunnelCells (0x639490) for each tunnel in the drag.
+		struct tTunnel
+		{
+			float startHeight;
+			float endHeight;
+			int32_t startStep;  // portal step indices into draggedSteps
+			int32_t endStep;
+		};
+		static_assert(sizeof(tTunnel) == 0x10);
 
 		struct tSolvedCell
 		{
@@ -143,6 +160,30 @@ class cSC4NetworkTool
 			return reinterpret_cast<pfn_InsertSmoothnessConstraint>(0x636030)(this, vertex1, vertex2, vertex3, smoothness);
 		}
 
+		// Creates one tunnel portal occupant on a cell. Takes the exemplar, rotation
+		// adjustment and terrain lift for `sequenceIndex` from the tunnel vectors
+		// below; piece rotation = (tunnelRotations[sequenceIndex] + direction) & 3.
+		// direction: 0=N, 1=E, 2=S, 3=W, pointing into the tunnel.
+		typedef cISC4NetworkOccupant* (__thiscall* pfn_InsertTunnelPiece)(cSC4NetworkTool* pThis, uint8_t direction, uint8_t sequenceIndex, cSC4NetworkCellInfo* cellInfo);
+		inline cISC4NetworkOccupant* InsertTunnelPiece(uint8_t direction, uint8_t sequenceIndex, cSC4NetworkCellInfo* cellInfo) {
+			return reinterpret_cast<pfn_InsertTunnelPiece>(0x628390)(this, direction, sequenceIndex, cellInfo);
+		}
+
+		// Pushes a tTunnel and marks portal (2) and hidden (3) steps for every
+		// tunnel in the straight part of the drag. numSteps is the number of
+		// steps that passed the earlier PlaceNetwork stages.
+		typedef void (__thiscall* pfn_IdentifyTunnelCells)(cSC4NetworkTool* pThis, int32_t& numSteps);
+		inline void IdentifyTunnelCells(int32_t& numSteps) {
+			return reinterpret_cast<pfn_IdentifyTunnelCells>(0x639490)(this, numSteps);
+		}
+
+		// Inserts the portals of every tunnel in `tunnels`. Returns at the first
+		// tunnel whose portals share neither a row nor a column.
+		typedef void (__thiscall* pfn_InsertTunnelPieces)(cSC4NetworkTool* pThis, cISC4NetworkOccupant::eNetworkType networkType);
+		inline void InsertTunnelPieces(cISC4NetworkOccupant::eNetworkType networkType) {
+			return reinterpret_cast<pfn_InsertTunnelPieces>(0x6287d0)(this, networkType);
+		}
+
 		typedef cSC4NetworkCellInfo* (__thiscall* pfn_GetCellInfo)(cSC4NetworkTool* pThis, uint32_t xz);
 		inline cSC4NetworkCellInfo* GetCellInfo(uint32_t xz) {
 			return reinterpret_cast<pfn_GetCellInfo>(0x633220)(this, xz);
@@ -151,30 +192,82 @@ class cSC4NetworkTool
 		void* vtable;
 		intptr_t RESERVED[6];
 		cSC4NetworkWorldCache networkWorldCache;
-		uint8_t RESERVED[4];
+		cISTETerrain* terrain;
 		intptr_t occupantManager;
 		uint8_t RESERVED[4];
-		bool placeById;
+		bool isPlacing;  // PlaceNetwork's first argument: true when committing a drag, false for previews
 		uint8_t RESERVED[3];
 		SC4Vector<tDraggedStep> draggedSteps;
 		SC4Vector<SC4Point<uint32_t>> draggedCells;
-		uint8_t RESERVED[0x98 - 0x6c];
+		uint8_t RESERVED[0x70 - 0x6c];
+		// BreakIntoStraightAndDiagSegments splits a drag into a straight part
+		// followed by a 45 degree part. Natively, IdentifyTunnelCells and
+		// FindTunnelEnd only look for tunnels in the straight part.
+		int32_t numDraggedSteps;
+		int32_t numStraightSteps;  // |dx - dz| steps; 0 for a pure diagonal drag
+		int32_t numPlaceableSteps;  // steps that passed every PlaceNetwork stage so far
+		// Directions index the cross-section tables: 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE.
+		int32_t straightDragDirection;
+		int32_t diagonalDragDirection;
+		uint8_t RESERVED[0x98 - 0x84];
 		SC4Vector<tSolvedCell> solvedCells;
 		uint8_t RESERVED[0xcc - 0xa4];
 		SC4Vector<tIntersection> highwayIntersections;
-		uint8_t RESERVED[0x124 - 0xd8];
+		uint8_t RESERVED[0xe4 - 0xd8];
+		SC4Vector<tTunnel> tunnels;
+		uint8_t RESERVED[0x124 - 0xf0];
 		cSC4VertexHtConstraintSatisfier vertexHtConstraintSatisfier1;
 		cSC4VertexHtConstraintSatisfier vertexHtConstraintSatisfier2;
-		uint8_t RESERVED[0x240 - 0x1ec];
+		uint8_t RESERVED[0x238 - 0x1ec];
+		float cellSize;
+		float minTunnelStartRise;  // cell size * tan(MinTerrainSlopeForTunnelStart): height gain between steps that starts a tunnel
 		uint32_t numCellsX;
 		uint32_t numCellsZ;
-		uint8_t RESERVED[0x270 - 0x248];
+		uint32_t numVerticesX;  // vertex index = z * numVerticesX + x
+		uint32_t numVerticesZ;
+		// Per dragDirection, the two vertices (offsets from a cell's NW vertex)
+		// of the cross section perpendicular to the drag. IdentifyTunnelCells
+		// averages them over a step's first and last cell to get its height.
+		int32_t crossSectionVertexOffset1[8];
+		int32_t crossSectionVertexOffset2[8];
+		// tPlacementParams, copied from the network's PlacementParams exemplar.
+		uint8_t RESERVED[0x2a8 - 0x290];
+		float minTerrainSlopeForTunnelStart;  // radians
+		float maxTunnelSlope;  // radians
+		uint8_t RESERVED[0x2e4 - 0x2b0];
+		// Per sequence index (portal tile), from the network's PlacementParams
+		// exemplar: 0xE974EAA4 TunnelResourceID, 0xE974EAA5 rotation adjustment
+		// (absent, so 0, for single-tile networks), 0xE974EAA6 TunnelModelHeights.
+		SC4Vector<uint32_t> tunnelExemplarIds;
+		SC4Vector<uint32_t> tunnelRotations;
+		SC4Vector<float> tunnelModelHeights;
+		uint8_t RESERVED[0x35c - 0x308];
+		cISC4NetworkOccupant::eNetworkType networkType;
+		// rest unknown
 };
 static_assert(offsetof(cSC4NetworkTool, networkWorldCache) == 0x1c);
+static_assert(offsetof(cSC4NetworkTool, terrain) == 0x44);
+static_assert(offsetof(cSC4NetworkTool, isPlacing) == 0x50);
 static_assert(offsetof(cSC4NetworkTool, draggedSteps) == 0x54);
+static_assert(offsetof(cSC4NetworkTool, numDraggedSteps) == 0x70);
+static_assert(offsetof(cSC4NetworkTool, numPlaceableSteps) == 0x78);
+static_assert(offsetof(cSC4NetworkTool, numStraightSteps) == 0x74);
+static_assert(offsetof(cSC4NetworkTool, straightDragDirection) == 0x7c);
+static_assert(offsetof(cSC4NetworkTool, diagonalDragDirection) == 0x80);
 static_assert(offsetof(cSC4NetworkTool, solvedCells) == 0x98);
+static_assert(offsetof(cSC4NetworkTool, tunnels) == 0xe4);
 static_assert(offsetof(cSC4NetworkTool, vertexHtConstraintSatisfier1) == 0x124);
-static_assert(sizeof(cSC4NetworkTool) == 0x270);
+static_assert(offsetof(cSC4NetworkTool, cellSize) == 0x238);
+static_assert(offsetof(cSC4NetworkTool, minTunnelStartRise) == 0x23c);
+static_assert(offsetof(cSC4NetworkTool, numCellsX) == 0x240);
+static_assert(offsetof(cSC4NetworkTool, numVerticesX) == 0x248);
+static_assert(offsetof(cSC4NetworkTool, crossSectionVertexOffset1) == 0x250);
+static_assert(offsetof(cSC4NetworkTool, crossSectionVertexOffset2) == 0x270);
+static_assert(offsetof(cSC4NetworkTool, tunnelExemplarIds) == 0x2e4);
+static_assert(offsetof(cSC4NetworkTool, minTerrainSlopeForTunnelStart) == 0x2a8);
+static_assert(offsetof(cSC4NetworkTool, maxTunnelSlope) == 0x2ac);
+static_assert(offsetof(cSC4NetworkTool, tunnelModelHeights) == 0x2fc);
+static_assert(offsetof(cSC4NetworkTool, networkType) == 0x35c);
 
 namespace nSC4Networks
 {

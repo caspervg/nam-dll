@@ -13,6 +13,7 @@
 #include "cISC4View3DWin.h"
 #include "cIGZWin.h"
 #include "cIGZWinBtn.h"
+#include "cIGZWinGen.h"
 #include "cRZAutoRefCount.h"
 #include "cRZBaseString.h"
 #include "cRZBaseWinProc.h"
@@ -279,12 +280,19 @@ namespace
 				kUIScriptType,
 				kUIScriptGroup,
 				kStyleSelectorUIInstance);
-			cIGZWin* const createdSelector = SC4UI::CreateLegacyWindowFromScript(
+			cIGZWin* const createdSelector = SC4UI::CreateWindowFromScript(
 				selectorKey,
 				view3D ? view3D->AsIGZWin() : nullptr,
-				kStyleSelectorWindowCLSID,
-				static_cast<cIGZWinProc*>(this));
+				kStyleSelectorWindowCLSID);
 			styleSelectorWindow = cRZAutoRefCount<cIGZWin>(createdSelector);
+			// Route the selector's messages to DoWinProcMessage, like the
+			// native bridge selector's own window procedure.
+			cRZAutoRefCount<cIGZWinGen> selectorWinGen;
+			if (styleSelectorWindow
+				&& styleSelectorWindow->QueryInterface(GZIID_cIGZWinGen, selectorWinGen.AsPPVoid()))
+			{
+				selectorWinGen->SetWinProc(static_cast<cIGZWinProc*>(this));
+			}
 			if (!styleSelectorWindow)
 			{
 				Logger::GetInstance().WriteLine(
