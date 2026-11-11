@@ -18,6 +18,7 @@ Settings::Settings() :
 	enableBridgeLastTileAbutmentPatch(true),
 	enableBridgeFarAbutmentClearancePatch(true),
 	enableParallelBridgesPatch(false),
+	enableBridgeDebugLog(false),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -46,6 +47,7 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableBridgeLastTileAbutmentPatch", enableBridgeLastTileAbutmentPatch);
 			readBoolProp("EnableBridgeFarAbutmentClearancePatch", enableBridgeFarAbutmentClearancePatch);
 			readBoolProp("EnableParallelBridgesPatch", enableParallelBridgesPatch);
+			readBoolProp("EnableBridgeDebugLog", enableBridgeDebugLog);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}

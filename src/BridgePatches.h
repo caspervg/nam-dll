@@ -12,4 +12,7 @@ namespace BridgePatches
 	// Experimental: removes the lateral one-tile network clearance of bridges,
 	// so that bridges can be built directly next to existing bridges and networks.
 	void InstallParallelBridgesPatch();
+
+	// Logs how the bridges of each drag are placed, and why a bridge is rejected.
+	void InstallDebugLog();
 }
