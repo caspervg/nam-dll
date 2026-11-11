@@ -15,7 +15,7 @@ Settings::Settings() :
 	enableVerticalPathSeparationPatch(true),
 	enableDualNetworkTransitPatch(false),
 	enableTransportMenuPatch(true),
-	enableBridgeLastTileAbutmentPatch(true),
+	enableBridgeShoreAbutmentPatch(true),
 	enableBridgeFarAbutmentClearancePatch(true),
 	enableParallelBridgesPatch(false),
 	enableBridgeDebugLog(false),
@@ -44,7 +44,7 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableVerticalPathSeparationPatch", enableVerticalPathSeparationPatch);
 			readBoolProp("EnableDualNetworkTransitPatch", enableDualNetworkTransitPatch);
 			readBoolProp("EnableTransportMenuPatch", enableTransportMenuPatch);
-			readBoolProp("EnableBridgeLastTileAbutmentPatch", enableBridgeLastTileAbutmentPatch);
+			readBoolProp("EnableBridgeShoreAbutmentPatch", enableBridgeShoreAbutmentPatch);
 			readBoolProp("EnableBridgeFarAbutmentClearancePatch", enableBridgeFarAbutmentClearancePatch);
 			readBoolProp("EnableParallelBridgesPatch", enableParallelBridgesPatch);
 			readBoolProp("EnableBridgeDebugLog", enableBridgeDebugLog);

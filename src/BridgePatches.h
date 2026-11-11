@@ -2,8 +2,9 @@
 
 namespace BridgePatches
 {
-	// Allows the far abutment of a bridge to be the last tile of the drag.
-	void InstallLastTileAbutmentPatch();
+	// Allows a bridge drag to end on the first tile of the far bank, as it may start on the last tile
+	// of the near bank: the far abutment moves onto the shore, so the network continues on that tile.
+	void InstallShoreAbutmentPatch();
 
 	// Skips the network-clearance check around the far abutment of a bridge,
 	// so that existing networks may lie directly behind it (as on the near side).
