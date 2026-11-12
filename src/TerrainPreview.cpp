@@ -3,6 +3,7 @@
 #include "Logger.h"
 #include "NetworkStubs.h"
 #include "Patching.h"
+#include "Settings.h"
 #include "cISC4App.h"
 #include "cISC4City.h"
 #include "cISTETerrain.h"
@@ -37,8 +38,7 @@ namespace
 	cSTETerrainViewPoint** const spPoints = reinterpret_cast<cSTETerrainViewPoint**>(0xb4c758);
 	const uint32_t* const spVertexCountX = reinterpret_cast<uint32_t*>(0xb4c74c);
 
-	// The view only redraws regions that changed, so the edited vertices have to be redrawn explicitly.
-	// RedisplayTerrain (0x749850) would also copy the actual terrain into the view again, so only its redraw message is posted.
+	// RedisplayTerrain (0x749850) would also copy the actual terrain into the view again, so only its redraw message is posted
 	constexpr uint32_t redrawTerrainRegionMessage = 0x870bc918;
 	typedef void (__cdecl* pfn_PostTerrainMessage)(uint32_t messageType, uint32_t data1, uint32_t data2, uint32_t data3, uint32_t data4);
 	pfn_PostTerrainMessage PostTerrainMessage = reinterpret_cast<pfn_PostTerrainMessage>(0x743380);
@@ -50,23 +50,31 @@ namespace
 
 	struct VertexChange
 	{
-		uint32_t index;  // into sPoints
 		float actualHeight;
 		float previewHeight;
 	};
 
-	std::vector<VertexChange> pending;
+	// changed vertices by their index into the terrain view points
+	std::unordered_map<uint32_t, VertexChange> pending;
 	uint32_t pendingVertexCountZ = 0;
 	bool solveAttempted = false;
 
-	std::vector<VertexChange> applied;
-	std::unordered_map<uint32_t, float> appliedHeightChanges;
+	std::unordered_map<uint32_t, VertexChange> applied;
 	cSTETerrainViewPoint* appliedPoints = nullptr;
 	uint32_t appliedVertexCountX = 0;
 	uint32_t appliedVertexCountZ = 0;
 	bool cellsOutlined = false;
 
-	// The cut and filled regions each get a single outline in their color, which is more opaque where the terrain changes more.
+	float vertexHeightChange(uint32_t x, uint32_t z)
+	{
+		if (x >= appliedVertexCountX || z >= appliedVertexCountZ) {
+			return 0.0f;
+		}
+		auto search = applied.find(z * appliedVertexCountX + x);
+		return search != applied.end() ? search->second.previewHeight - search->second.actualHeight : 0.0f;
+	}
+
+	// The cut and filled regions each get one outline in their color, which is more opaque where the terrain changes more.
 	// The outline textures (tools/grading_outlines.py) are white and draw the sides of a cell given by their instance ID.
 	constexpr uint32_t outlineTextureType = 0x7ab50e44;
 	constexpr uint32_t outlineTextureGroup = 0x4e414d47;
@@ -81,27 +89,25 @@ namespace
 		outlineCornerXMaxZMax = 1 << 7,
 	};
 
-	// Textured selections share one combiner, of which only the RGB mode is set per selection. Its second RGB source is the
-	// vertex color, so the color of a selection is never used. While the outlines are shown, the constant color is used instead,
-	// which with the modulate mode gives the outline texture times the color of the selection.
+	// Textured selections share one combiner, whose second RGB source is the vertex color instead of the selection color.
+	// While the outlines are shown, it uses the constant color, so the outline texture is modulated with the selection color.
 	uint8_t* const texturedSelectionRGBSource1 = reinterpret_cast<uint8_t*>(0xb0d6f2);  // cGDCombiner at 0xb0d6f0
 	constexpr uint8_t sourcePrimaryColor = 3;
 	constexpr uint8_t sourceConstant = 2;
 	constexpr int32_t combineModeModulate = 1;  // also halves the selection alpha
 	bool combinerSourceReplaced = false;
-	uint8_t cutColor[3];
-	uint8_t fillColor[3];
+	uint8_t cutColor[4];
+	uint8_t fillColor[4];
 	constexpr float fullOpacityHeightChange = 16.0f;
 	constexpr float minOpacityFactor = 0.15f;
-	float outlineOpacity;
-	float groundOutlineOpacity = 1.0f;  // the outlines on the actual terrain are fainter next to the wireframe
+	float groundOutlineOpacity = 1.0f;  // fainter next to the wireframe
 
-	// the combine mode of the outlines halves their alpha, so this is twice the configured opacity
+	// logarithmic, so that each doubling of the change is an equal step, and doubled as the outline combine mode halves it
 	float opacityFor(float heightChange)
 	{
-		// logarithmic, so that each doubling of the change is an equal step, from small adjustments up to deep cuts
+		const uint8_t* color = heightChange < 0 ? cutColor : fillColor;
 		float strength = (std::min)(std::log1p(std::abs(heightChange)) / std::log1p(fullOpacityHeightChange), 1.0f);
-		float opacity = outlineOpacity * (minOpacityFactor + (1 - minOpacityFactor) * strength);
+		float opacity = color[3] / 255.0f * (minOpacityFactor + (1 - minOpacityFactor) * strength);
 		return (std::min)(opacity * 2, 1.0f);
 	}
 
@@ -114,33 +120,31 @@ namespace
 	}
 
 	// outlines the cells around the changed vertices, to show that this terrain is only a preview
-	void outlineCells(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
+	void outlineCells()
 	{
 		cISTETerrainView* pView = getTerrainView();
-		if (pView == nullptr || vertexCountX < 2) {
+		if (pView == nullptr || appliedVertexCountX < 2) {
 			return;
 		}
+		int cellCountX = static_cast<int>(appliedVertexCountX) - 1;
+		int cellCountZ = static_cast<int>(appliedVertexCountZ) - 1;
 		std::set<std::pair<int, int>> cells;
-		for (auto& change : changes) {
-			int x = change.index % vertexCountX;
-			int z = change.index / vertexCountX;
+		for (auto& entry : applied) {
+			int x = entry.first % appliedVertexCountX;
+			int z = entry.first / appliedVertexCountX;
 			for (int dz = -1; dz <= 0; dz++) {
 				for (int dx = -1; dx <= 0; dx++) {
-					if (x + dx >= 0 && x + dx < static_cast<int>(vertexCountX) - 1 && z + dz >= 0) {
+					if (x + dx >= 0 && x + dx < cellCountX && z + dz >= 0 && z + dz < cellCountZ) {
 						cells.insert({x + dx, z + dz});
 					}
 				}
 			}
 		}
-		auto heightChange = [vertexCountX](int x, int z) {
-			auto search = appliedHeightChanges.find(z * vertexCountX + x);
-			return search != appliedHeightChanges.end() ? search->second : 0.0f;
-		};
 		// the corners of a cell can be raised and lowered at the same time, so the largest change decides
 		std::map<std::pair<int, int>, float> cellChanges;
 		for (auto& [x, z] : cells) {
 			float change = 0.0f;
-			for (float cornerChange : {heightChange(x, z), heightChange(x + 1, z), heightChange(x, z + 1), heightChange(x + 1, z + 1)}) {
+			for (float cornerChange : {vertexHeightChange(x, z), vertexHeightChange(x + 1, z), vertexHeightChange(x, z + 1), vertexHeightChange(x + 1, z + 1)}) {
 				if (std::abs(cornerChange) > std::abs(change)) {
 					change = cornerChange;
 				}
@@ -188,16 +192,17 @@ namespace
 		}
 	}
 
-	void redraw(const std::vector<VertexChange>& changes, uint32_t vertexCountX)
+	// the view only redraws regions that changed, so the edited vertices are redrawn explicitly
+	void redraw()
 	{
-		if (changes.empty() || vertexCountX == 0) {
+		if (applied.empty()) {
 			return;
 		}
 		uint32_t minX = UINT32_MAX, minZ = UINT32_MAX, maxX = 0, maxZ = 0;
-		float minY = changes[0].actualHeight, maxY = changes[0].actualHeight;
-		for (auto& change : changes) {
-			uint32_t x = change.index % vertexCountX;
-			uint32_t z = change.index / vertexCountX;
+		float minY = applied.begin()->second.actualHeight, maxY = minY;
+		for (auto& [index, change] : applied) {
+			uint32_t x = index % appliedVertexCountX;
+			uint32_t z = index / appliedVertexCountX;
 			minX = (std::min)(minX, x);
 			maxX = (std::max)(maxX, x);
 			minZ = (std::min)(minZ, z);
@@ -208,8 +213,8 @@ namespace
 		// one cell of margin, as the triangles around the edited vertices change as well
 		minX = minX > 0 ? minX - 1 : 0;
 		minZ = minZ > 0 ? minZ - 1 : 0;
-		maxX = (std::min)(maxX + 1, vertexCountX - 1);
-		maxZ += 1;
+		maxX = (std::min)(maxX + 1, appliedVertexCountX - 1);
+		maxZ = (std::min)(maxZ + 1, appliedVertexCountZ - 1);
 		auto heightToData = [](float y) { return static_cast<uint32_t>(std::clamp(y, 0.0f, 65535.0f)); };
 		PostTerrainMessage(
 			redrawTerrainRegionMessage,
@@ -219,10 +224,8 @@ namespace
 			0);
 	}
 
-	// With the wireframe style, the actual terrain stays and the graded terrain is drawn over it as lines along the cell edges,
-	// with dotted lines to the actual terrain. Each line or dash is an effect with a single model particle, which follows the
-	// effect transform (tools/grading_outlines.py). Like the ghost preview, a second copy of each one is drawn more faintly where
-	// the actual terrain hides it, which shows the graded terrain of a cut.
+	// The wireframe draws the graded terrain as lines along the cell edges, with dotted lines down to the actual terrain.
+	// Each line or dash is an effect with one model particle (tools/grading_outlines.py), with a fainter copy where it is hidden.
 	bool wireframeEnabled = false;
 	constexpr const char* lineEffectName = "nam_grading_line";  // 16 m along x
 	constexpr const char* dashEffectName = "nam_grading_dash";  // 0.8 m up along y
@@ -253,7 +256,7 @@ namespace
 	std::vector<WireframeEffect> dashEffects;
 	bool effectsMissing = false;
 
-	// The color parameter of an effect does not reach model particles, so the particles are colored while they are drawn.
+	// the color parameter of an effect does not reach model particles, so the particles are colored while they are drawn
 	std::unordered_map<cSC4ModelBasedParticlesEffect*, std::array<float, 3>> modelColors;
 	bool modelsPending = false;
 
@@ -396,19 +399,15 @@ namespace
 		uint32_t countX = appliedVertexCountX;
 		uint32_t countZ = appliedVertexCountZ;
 		if (points != nullptr && points == *spPoints && countX > 1 && countZ > 1) {
-			auto heightChange = [countX](uint32_t x, uint32_t z) {
-				auto search = appliedHeightChanges.find(z * countX + x);
-				return search != appliedHeightChanges.end() ? search->second : 0.0f;
-			};
 			auto gradedPosition = [&](uint32_t x, uint32_t z) {
-				return cS3DVector3(x * cellSize, points[z * countX + x].y + heightChange(x, z), z * cellSize);
+				return cS3DVector3(x * cellSize, points[z * countX + x].y + vertexHeightChange(x, z), z * cellSize);
 			};
 
 			// the edges of all cells with a changed corner, each in the color of its larger change
 			std::set<std::pair<uint32_t, uint32_t>> vertices;
-			for (auto& change : applied) {
-				uint32_t x = change.index % countX;
-				uint32_t z = change.index / countX;
+			for (auto& entry : applied) {
+				uint32_t x = entry.first % countX;
+				uint32_t z = entry.first / countX;
 				for (uint32_t vz = z > 0 ? z - 1 : 0; vz <= (std::min)(z + 1, countZ - 1); vz++) {
 					for (uint32_t vx = x > 0 ? x - 1 : 0; vx <= (std::min)(x + 1, countX - 1); vx++) {
 						vertices.insert({vx, vz});
@@ -420,9 +419,9 @@ namespace
 					if (vertices.count({nx, nz}) == 0) {
 						continue;
 					}
-					float change = heightChange(x, z);
-					if (std::abs(heightChange(nx, nz)) > std::abs(change)) {
-						change = heightChange(nx, nz);
+					float change = vertexHeightChange(x, z);
+					if (std::abs(vertexHeightChange(nx, nz)) > std::abs(change)) {
+						change = vertexHeightChange(nx, nz);
 					}
 					if (std::abs(change) > minHeightChange) {
 						lines.push_back({lineTransform(gradedPosition(x, z), gradedPosition(nx, nz)), change});
@@ -431,7 +430,7 @@ namespace
 			}
 
 			// dotted lines between the actual and the graded terrain at the changed corners, centered between both
-			for (auto& change : applied) {
+			for (auto& [index, change] : applied) {
 				float height = change.previewHeight - change.actualHeight;
 				if (std::abs(height) < minDottedLineHeight) {
 					continue;
@@ -439,8 +438,8 @@ namespace
 				float bottom = (std::min)(change.actualHeight, change.previewHeight);
 				int count = static_cast<int>((std::abs(height) - dashLength) / dashSpacing) + 1;
 				float first = bottom + (std::abs(height) - (count - 1) * dashSpacing - dashLength) / 2;
-				float x = (change.index % countX) * cellSize;
-				float z = (change.index / countX) * cellSize;
+				float x = (index % countX) * cellSize;
+				float z = (index / countX) * cellSize;
 				for (int i = 0; i < count; i++) {
 					dashes.push_back({cS3DTransform(cS3DVector3(x, first + i * dashSpacing, z)), height});
 				}
@@ -448,16 +447,6 @@ namespace
 		}
 		showItems(lineEffects, lineEffectName, lines, lineOpacity);
 		showItems(dashEffects, dashEffectName, dashes, dottedLineOpacity);
-	}
-
-	float getActualHeight(cSTETerrainViewPoint* points, uint32_t index)
-	{
-		for (auto& change : applied) {
-			if (change.index == index) {
-				return change.actualHeight;
-			}
-		}
-		return points[index].y;
 	}
 
 	// The tool tries to place the piece without committing it, which still solves the terrain heights.
@@ -481,32 +470,32 @@ namespace
 				continue;
 			}
 			uint32_t index = static_cast<uint32_t>(vertex);
-			float actualHeight = getActualHeight(points, index);
+			auto previous = applied.find(index);  // the terrain style still shows the previous preview
+			float actualHeight = previous != applied.end() ? previous->second.actualHeight : points[index].y;
 			if (std::abs(height - actualHeight) > minHeightChange) {
-				pending.push_back({index, actualHeight, height});
+				pending[index] = {actualHeight, height};
 			}
 		}
 	}
 
-	void apply(const std::vector<VertexChange>& changes)
+	void apply()
 	{
 		cSTETerrainViewPoint* points = *spPoints;
-		if (points == nullptr || changes.empty()) {
+		if (points == nullptr || pending.empty()) {
 			return;
 		}
-		for (auto& change : changes) {
-			if (!wireframeEnabled) {
-				points[change.index].y = change.previewHeight;
+		if (!wireframeEnabled) {
+			for (auto& [index, change] : pending) {
+				points[index].y = change.previewHeight;
 			}
-			appliedHeightChanges[change.index] = change.previewHeight - change.actualHeight;
 		}
-		applied = changes;
+		applied = std::move(pending);
 		appliedPoints = points;
 		appliedVertexCountX = *spVertexCountX;
 		appliedVertexCountZ = pendingVertexCountZ;
-		outlineCells(applied, appliedVertexCountX);
+		outlineCells();
 		if (!wireframeEnabled) {
-			redraw(applied, appliedVertexCountX);
+			redraw();
 		}
 	}
 
@@ -524,15 +513,14 @@ namespace
 		}
 		// the terrain view copies the actual terrain again when it changes, so only restore what is still ours
 		if (!wireframeEnabled && appliedPoints != nullptr && appliedPoints == *spPoints) {
-			for (auto& change : applied) {
-				if (appliedPoints[change.index].y == change.previewHeight) {
-					appliedPoints[change.index].y = change.actualHeight;
+			for (auto& [index, change] : applied) {
+				if (appliedPoints[index].y == change.previewHeight) {
+					appliedPoints[index].y = change.actualHeight;
 				}
 			}
-			redraw(applied, appliedVertexCountX);
+			redraw();
 		}
 		applied.clear();
-		appliedHeightChanges.clear();
 		appliedPoints = nullptr;
 	}
 
@@ -560,7 +548,7 @@ void TerrainPreview::EndMouseMove()
 {
 	if (solveAttempted) {
 		clearTerrain();
-		apply(pending);
+		apply();
 		pending.clear();
 		// the effects are reused for the new placement, which keeps them from flickering
 		if (wireframeEnabled) {
@@ -582,18 +570,14 @@ void TerrainPreview::Shutdown()
 	releaseEffects(dashEffects);
 }
 
-bool TerrainPreview::GetWireframeColor(cSC4ModelBasedParticlesEffect* particles, float (&color)[3])
+const std::array<float, 3>* TerrainPreview::GetWireframeColor(cSC4ModelBasedParticlesEffect* particles)
 {
 	auto search = modelColors.find(particles);
 	if (search == modelColors.end() && modelsPending) {
 		findPendingModels();
 		search = modelColors.find(particles);
 	}
-	if (search == modelColors.end()) {
-		return false;
-	}
-	std::copy(search->second.begin(), search->second.end(), color);
-	return true;
+	return search != modelColors.end() ? &search->second : nullptr;
 }
 
 const std::unordered_map<cSC4ModelBasedParticlesEffect*, std::array<float, 3>>& TerrainPreview::GetWireframeModels()
@@ -609,28 +593,23 @@ float TerrainPreview::GetHeightChange(float x, float z)
 	if (applied.empty() || x < 0 || z < 0) {
 		return 0.0f;
 	}
-	auto heightChange = [](uint32_t vx, uint32_t vz) {
-		auto search = appliedHeightChanges.find(vz * appliedVertexCountX + vx);
-		return search != appliedHeightChanges.end() ? search->second : 0.0f;
-	};
 	float fx = x / cellSize;
 	float fz = z / cellSize;
 	uint32_t vx = static_cast<uint32_t>(fx);
 	uint32_t vz = static_cast<uint32_t>(fz);
 	float tx = fx - vx;
 	float tz = fz - vz;
-	float north = heightChange(vx, vz) * (1 - tx) + heightChange(vx + 1, vz) * tx;
-	float south = heightChange(vx, vz + 1) * (1 - tx) + heightChange(vx + 1, vz + 1) * tx;
+	float north = vertexHeightChange(vx, vz) * (1 - tx) + vertexHeightChange(vx + 1, vz) * tx;
+	float south = vertexHeightChange(vx, vz + 1) * (1 - tx) + vertexHeightChange(vx + 1, vz + 1) * tx;
 	return north * (1 - tz) + south * tz;
 }
 
-void TerrainPreview::Install(float opacity, const int (&cut)[3], const int (&fill)[3], bool wireframe)
+void TerrainPreview::Install(const Settings& settings)
 {
-	wireframeEnabled = wireframe;
-	groundOutlineOpacity = wireframe ? 0.6f : 1.0f;
-	outlineOpacity = std::clamp(opacity, 0.0f, 1.0f);
-	std::copy(std::begin(cut), std::end(cut), cutColor);
-	std::copy(std::begin(fill), std::end(fill), fillColor);
+	wireframeEnabled = settings.ghostPreviewWireframe;
+	groundOutlineOpacity = wireframeEnabled ? 0.6f : 1.0f;
+	std::copy(std::begin(settings.ghostPreviewCutColor), std::end(settings.ghostPreviewCutColor), cutColor);
+	std::copy(std::begin(settings.ghostPreviewFillColor), std::end(settings.ghostPreviewFillColor), fillColor);
 
 	auto callSite = reinterpret_cast<uint8_t*>(InsertIsolatedHighwayIntersection_CallSite);
 	uint32_t target = InsertIsolatedHighwayIntersection_CallSite + 5 + *reinterpret_cast<int32_t*>(callSite + 1);

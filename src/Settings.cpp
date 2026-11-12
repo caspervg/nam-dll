@@ -19,14 +19,11 @@ Settings::Settings() :
 	enableTransportMenuPatch(true),
 	enableGhostPreviewPatch(true),
 	ghostPreviewOverlay(true),
-	ghostPreviewGrading(false),
+	ghostPreviewGrading(true),
 	ghostPreviewWireframe(true),
-	ghostPreviewColor{140, 204, 255},
-	ghostPreviewAlphaScale(0.75f),
-	ghostPreviewDepthTolerance(1.0f),
-	ghostPreviewGradingOpacity(0.4f),
-	ghostPreviewCutColor{239, 28, 36},  // NAM hole digger red
-	ghostPreviewFillColor{63, 73, 206},  // NAM raiser blue
+	ghostPreviewColor{140, 204, 255, 191},
+	ghostPreviewCutColor{239, 28, 36, 102},  // NAM hole digger red
+	ghostPreviewFillColor{63, 73, 206, 102},  // NAM raiser blue
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -39,18 +36,12 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			auto readBoolProp = [&ini](const std::string propName, bool &propValue) {
 				propValue ^= ini.get("NAM").get(propName) == (propValue ? "false" : "true");  // toggle if opposite of default
 			};
-			auto readFloatProp = [&ini](const std::string propName, float &propValue) {
-				const std::string& value = ini.get("NAM").get(propName);
-				if (!value.empty()) {
-					propValue = std::stof(value);
-				}
-			};
-			auto readColorProp = [&ini](const std::string propName, int (&propValue)[3]) {
-				int r, g, b;
-				if (std::sscanf(ini.get("NAM").get(propName).c_str(), "%d,%d,%d", &r, &g, &b) == 3) {
-					propValue[0] = std::clamp(r, 0, 255);
-					propValue[1] = std::clamp(g, 0, 255);
-					propValue[2] = std::clamp(b, 0, 255);
+			auto readColorProp = [&ini](const std::string propName, uint8_t (&propValue)[4]) {
+				int rgba[4];
+				if (std::sscanf(ini.get("NAM").get(propName).c_str(), "%d,%d,%d,%d", &rgba[0], &rgba[1], &rgba[2], &rgba[3]) == 4) {
+					for (int i = 0; i < 4; i++) {
+						propValue[i] = static_cast<uint8_t>(std::clamp(rgba[i], 0, 255));
+					}
 				}
 			};
 			readBoolProp("EnableKeyboardShortcuts", enableKeyboardShortcuts);
@@ -67,17 +58,14 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableDualNetworkTransitPatch", enableDualNetworkTransitPatch);
 			readBoolProp("EnableTransportMenuPatch", enableTransportMenuPatch);
 			readBoolProp("EnableGhostPreviewPatch", enableGhostPreviewPatch);
-			if (const std::string& mode = ini.get("NAM").get("GhostPreviewMode"); !mode.empty()) {
-				ghostPreviewOverlay = mode == "overlay" || mode == "both";
-				ghostPreviewGrading = mode == "grading" || mode == "both";
+			if (const std::string mode = ini.get("NAM").get("GhostPreviewMode"); mode == "overlay" || mode == "grading" || mode == "both") {
+				ghostPreviewOverlay = mode != "grading";
+				ghostPreviewGrading = mode != "overlay";
 			}
-			if (const std::string& style = ini.get("NAM").get("GhostPreviewGradingStyle"); !style.empty()) {
-				ghostPreviewWireframe = style != "terrain";
+			if (const std::string style = ini.get("NAM").get("GhostPreviewGradingStyle"); style == "wireframe" || style == "terrain") {
+				ghostPreviewWireframe = style == "wireframe";
 			}
 			readColorProp("GhostPreviewColor", ghostPreviewColor);
-			readFloatProp("GhostPreviewAlphaScale", ghostPreviewAlphaScale);
-			readFloatProp("GhostPreviewDepthTolerance", ghostPreviewDepthTolerance);
-			readFloatProp("GhostPreviewGradingOpacity", ghostPreviewGradingOpacity);
 			readColorProp("GhostPreviewCutColor", ghostPreviewCutColor);
 			readColorProp("GhostPreviewFillColor", ghostPreviewFillColor);
 		} else {

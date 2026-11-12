@@ -2,22 +2,20 @@
 #include "Patching.h"
 #include "TerrainPreview.h"
 #include "EffectStubs.h"
-#include "wil/result_macros.h"
 #include <algorithm>
 #include <string>
 #include <vector>
 
-// Whenever the intersection tool has a preview effect, we create a second instance of the same effect (the ghost).
-// Its model is drawn with depth test GREATER, so it only shows where the preview is hidden by terrain or buildings.
-// The preview models write depth, so the ghost has to be drawn right before the preview each frame.
-// With grading, the terrain is drawn as it will be after placement, and the preview is moved onto it.
+// The ghost is a second instance of the preview effect, drawn with depth test GREATER, so it only shows where the preview is hidden.
+// The preview writes depth, so the ghost is drawn right before it. With grading, both are moved onto the graded terrain.
 namespace
 {
+	constexpr float depthTolerance = 1.0f;  // how deep in meters parts of the preview are hidden before they show as ghost
+
 	bool overlayEnabled;
 	bool gradingEnabled;
 	float ghostColor[3];
 	float ghostAlphaScale;
-	float depthTolerance;
 
 	cISC4VisualEffect* ghost = nullptr;
 	cISC4VisualEffect* ghostSource = nullptr;
@@ -25,7 +23,20 @@ namespace
 	std::vector<cSC4ModelBasedParticlesEffect*> ghostModels;
 	std::vector<cSC4ModelBasedParticlesEffect*> sourceModels;
 
-	cSC4ModelBasedParticlesEffect::pfn_RenderActiveParticles RenderActiveParticles = nullptr;
+	typedef bool (__thiscall* pfn_Shutdown)(cSC4ViewInputControlNetworkIntxTool* pThis);
+	typedef bool (__thiscall* pfn_OnKeyDown)(cSC4ViewInputControlNetworkIntxTool* pThis, int32_t vkCode, uint32_t modifiers);
+	typedef bool (__thiscall* pfn_OnMouse)(cSC4ViewInputControlNetworkIntxTool* pThis, int32_t x, int32_t z, uint32_t modifiers);
+	typedef bool (__thiscall* pfn_OnMouseExit)(cSC4ViewInputControlNetworkIntxTool* pThis);
+	typedef void* (__thiscall* pfn_DeletingDtor)(cSC4ViewInputControlNetworkIntxTool* pThis, uint32_t flags);
+
+	const pfn_Shutdown Shutdown = reinterpret_cast<pfn_Shutdown>(0x660d30);
+	const pfn_OnKeyDown OnKeyDown = reinterpret_cast<pfn_OnKeyDown>(0x660e80);
+	const pfn_OnMouse OnMouseDownL = reinterpret_cast<pfn_OnMouse>(0x661010);
+	const pfn_OnMouse OnMouseUpL = reinterpret_cast<pfn_OnMouse>(0x660c30);
+	const pfn_OnMouse OnMouseMove = reinterpret_cast<pfn_OnMouse>(0x661260);
+	const pfn_OnMouseExit OnMouseExit = reinterpret_cast<pfn_OnMouseExit>(0x660de0);
+	const pfn_DeletingDtor DeletingDtor = reinterpret_cast<pfn_DeletingDtor>(0x6611e0);
+	const auto RenderActiveParticles = reinterpret_cast<cSC4ModelBasedParticlesEffect::pfn_RenderActiveParticles>(cSC4ModelBasedParticlesEffect::kRenderActiveParticles);
 
 	void destroyGhost()
 	{
@@ -89,12 +100,12 @@ namespace
 		}
 	}
 
-	// Moving the preview and ghost towards the camera only changes their depth, as the camera is orthographic.
-	// Parts buried less than the tolerance are then drawn as the regular preview instead of the ghost.
+	// Moving the preview and ghost towards the orthographic camera only changes their depth,
+	// so parts buried less than the tolerance are drawn as the regular preview instead of the ghost.
 	cS3DVector3 getToleranceShift(SC4DrawContext* drawContext)
 	{
 		cS3DVector3 shift(0.0f);
-		if (depthTolerance != 0.0f && drawContext->camera != nullptr) {
+		if (drawContext->camera != nullptr) {
 			cS3DVector3 position = GetCameraPosition(drawContext->camera);
 			cS3DVector3& lookAt = drawContext->camera->vPos;
 			shift = cS3DVector3(position.fX - lookAt.fX, position.fY - lookAt.fY, position.fZ - lookAt.fZ);
@@ -141,14 +152,13 @@ namespace
 		if (contains(ghostModels, pThis)) {
 			return;  // drawn together with the preview
 		}
-		float wireframeColor[3];
-		bool isWireframe = TerrainPreview::GetWireframeColor(pThis, wireframeColor);
-		if (isWireframe && !sourceModels.empty()) {
+		const std::array<float, 3>* wireframeColor = TerrainPreview::GetWireframeColor(pThis);
+		if (wireframeColor != nullptr && !sourceModels.empty()) {
 			return;  // drawn before the preview, so that the preview covers it and its hidden copy only shows behind terrain
 		}
 		if (!contains(sourceModels, pThis)) {
-			if (isWireframe) {
-				setColor(pThis, wireframeColor);
+			if (wireframeColor != nullptr) {
+				setColor(pThis, wireframeColor->data());
 			}
 			RenderActiveParticles(pThis, drawContext);
 			return;
@@ -182,20 +192,6 @@ namespace
 		}
 		renderShifted(pThis, drawContext, shift);
 	}
-
-	typedef bool (__thiscall* pfn_Shutdown)(cSC4ViewInputControlNetworkIntxTool* pThis);
-	typedef bool (__thiscall* pfn_OnKeyDown)(cSC4ViewInputControlNetworkIntxTool* pThis, int32_t vkCode, uint32_t modifiers);
-	typedef bool (__thiscall* pfn_OnMouse)(cSC4ViewInputControlNetworkIntxTool* pThis, int32_t x, int32_t z, uint32_t modifiers);
-	typedef bool (__thiscall* pfn_OnMouseExit)(cSC4ViewInputControlNetworkIntxTool* pThis);
-	typedef void* (__thiscall* pfn_DeletingDtor)(cSC4ViewInputControlNetworkIntxTool* pThis, uint32_t flags);
-
-	pfn_Shutdown Shutdown = nullptr;
-	pfn_OnKeyDown OnKeyDown = nullptr;
-	pfn_OnMouse OnMouseDownL = nullptr;
-	pfn_OnMouse OnMouseUpL = nullptr;
-	pfn_OnMouse OnMouseMove = nullptr;
-	pfn_OnMouseExit OnMouseExit = nullptr;
-	pfn_DeletingDtor DeletingDtor = nullptr;
 
 	// The tool replaces or releases its preview effect in these methods, so the ghost is updated after each of them.
 	bool __fastcall Hook_Shutdown(cSC4ViewInputControlNetworkIntxTool* pThis, void*)
@@ -252,34 +248,12 @@ namespace
 		return DeletingDtor(pThis, flags);
 	}
 
-	struct VTableHook
+	// replaces a vtable slot, after checking that it still holds the original method
+	template <typename Original, typename Hook>
+	void patchSlot(uint32_t slotAddress, Original original, Hook hook)
 	{
-		uint32_t slotAddress;
-		uint32_t expected;
-		void** original;
-		void* hook;
-	};
-
-	constexpr uint32_t toolSlot(uint32_t offset)
-	{
-		return cSC4ViewInputControlNetworkIntxTool::kVTable + offset;
+		Patching::PatchImmediate32(slotAddress, reinterpret_cast<uint32_t>(original), reinterpret_cast<uint32_t>(hook));
 	}
-
-	const VTableHook vtableHooks[] = {
-		{toolSlot(0x10), 0x660d30, reinterpret_cast<void**>(&Shutdown), reinterpret_cast<void*>(&Hook_Shutdown)},
-		{toolSlot(0x38), 0x660e80, reinterpret_cast<void**>(&OnKeyDown), reinterpret_cast<void*>(&Hook_OnKeyDown)},
-		{toolSlot(0x40), 0x661010, reinterpret_cast<void**>(&OnMouseDownL), reinterpret_cast<void*>(&Hook_OnMouseDownL)},
-		{toolSlot(0x48), 0x660c30, reinterpret_cast<void**>(&OnMouseUpL), reinterpret_cast<void*>(&Hook_OnMouseUpL)},
-		{toolSlot(0x50), 0x661260, reinterpret_cast<void**>(&OnMouseMove), reinterpret_cast<void*>(&Hook_OnMouseMove)},
-		{toolSlot(0x58), 0x660de0, reinterpret_cast<void**>(&OnMouseExit), reinterpret_cast<void*>(&Hook_OnMouseExit)},
-		{toolSlot(0x68), 0x6611e0, reinterpret_cast<void**>(&DeletingDtor), reinterpret_cast<void*>(&Hook_DeletingDtor)},
-		{
-			cSC4ModelBasedParticlesEffect::kVTable + cSC4ModelBasedParticlesEffect::kRenderActiveParticlesSlot,
-			cSC4ModelBasedParticlesEffect::kRenderActiveParticles,
-			reinterpret_cast<void**>(&RenderActiveParticles),
-			reinterpret_cast<void*>(&Hook_RenderActiveParticles)
-		},
-	};
 }
 
 void GhostPreview::Install(const Settings& settings)
@@ -287,19 +261,20 @@ void GhostPreview::Install(const Settings& settings)
 	for (int i = 0; i < 3; i++) {
 		ghostColor[i] = settings.ghostPreviewColor[i] / 255.0f;
 	}
+	ghostAlphaScale = settings.ghostPreviewColor[3] / 255.0f;
 	overlayEnabled = settings.ghostPreviewOverlay;
 	gradingEnabled = settings.ghostPreviewGrading;
-	ghostAlphaScale = settings.ghostPreviewAlphaScale;
-	depthTolerance = settings.ghostPreviewDepthTolerance;
 
-	// check all slots first, so that nothing is patched if any of them is unexpected
-	for (auto& vtableHook : vtableHooks) {
-		THROW_HR_IF(E_FAIL, *reinterpret_cast<uint32_t*>(vtableHook.slotAddress) != vtableHook.expected);
-	}
 	if (gradingEnabled) {
-		TerrainPreview::Install(settings.ghostPreviewGradingOpacity, settings.ghostPreviewCutColor, settings.ghostPreviewFillColor, settings.ghostPreviewWireframe);
+		TerrainPreview::Install(settings);
 	}
-	for (auto& vtableHook : vtableHooks) {
-		*vtableHook.original = reinterpret_cast<void*>(Patching::PatchVTableSlot(vtableHook.slotAddress, vtableHook.expected, vtableHook.hook));
-	}
+	constexpr uint32_t toolVTable = cSC4ViewInputControlNetworkIntxTool::kVTable;
+	patchSlot(toolVTable + 0x10, Shutdown, &Hook_Shutdown);
+	patchSlot(toolVTable + 0x38, OnKeyDown, &Hook_OnKeyDown);
+	patchSlot(toolVTable + 0x40, OnMouseDownL, &Hook_OnMouseDownL);
+	patchSlot(toolVTable + 0x48, OnMouseUpL, &Hook_OnMouseUpL);
+	patchSlot(toolVTable + 0x50, OnMouseMove, &Hook_OnMouseMove);
+	patchSlot(toolVTable + 0x58, OnMouseExit, &Hook_OnMouseExit);
+	patchSlot(toolVTable + 0x68, DeletingDtor, &Hook_DeletingDtor);
+	patchSlot(cSC4ModelBasedParticlesEffect::kVTable + cSC4ModelBasedParticlesEffect::kRenderActiveParticlesSlot, RenderActiveParticles, &Hook_RenderActiveParticles);
 }

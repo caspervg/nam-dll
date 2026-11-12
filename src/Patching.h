@@ -17,7 +17,4 @@ namespace Patching
 
 	void InstallHook(uint32_t address, void (*pfnFunc)(void));
 	void InstallCallHook(uint32_t address, void (*pfnFunc)(void));
-
-	// returns the previous slot value
-	uint32_t PatchVTableSlot(uint32_t slotAddress, uint32_t expectedValue, void* newValue);
 }

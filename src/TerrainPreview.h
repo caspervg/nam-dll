@@ -2,15 +2,14 @@
 #include <array>
 #include <unordered_map>
 
+class Settings;
 class cSC4ModelBasedParticlesEffect;
 
-// While hovering a puzzle piece, the intersection tool already solves the terrain heights of a placement without committing them.
-// This shows that solution either as a wireframe over the actual terrain, or by copying it into the vertices drawn by the terrain view.
-// The terrain itself is not modified, so nothing in the city reacts to it.
+// Shows the terrain heights that the intersection tool solves for a hovered puzzle piece, without changing the actual terrain.
+// They are drawn either as a wireframe over the actual terrain, or by copying them into the vertices of the terrain view.
 namespace TerrainPreview
 {
-	// the changed cells are outlined in the cut or fill color (R,G,B), with the given opacity for large height changes
-	void Install(float opacity, const int (&cutColor)[3], const int (&fillColor)[3], bool wireframe);
+	void Install(const Settings& settings);
 
 	// call around the intersection tool's OnMouseMove, which only solves a placement when the hovered cell changes
 	void BeginMouseMove();
@@ -22,8 +21,8 @@ namespace TerrainPreview
 	// also releases the wireframe effects, when the tool goes away
 	void Shutdown();
 
-	// color of a wireframe particle effect, false for any other one
-	bool GetWireframeColor(cSC4ModelBasedParticlesEffect* particles, float (&color)[3]);
+	// color of a wireframe particle effect, nullptr for any other one
+	const std::array<float, 3>* GetWireframeColor(cSC4ModelBasedParticlesEffect* particles);
 
 	// all wireframe particle effects and their colors
 	const std::unordered_map<cSC4ModelBasedParticlesEffect*, std::array<float, 3>>& GetWireframeModels();

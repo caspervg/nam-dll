@@ -26,7 +26,6 @@ set(NAM_SOURCES
     src/DirtRoadAccess.cpp
     src/FlexPieces.cpp
     src/GhostPreview.cpp
-    src/TerrainPreview.cpp
     src/Logger.cpp
     src/NAMDllDirector.cpp
     src/NetworkSlopes.cpp
@@ -36,6 +35,7 @@ set(NAM_SOURCES
     src/Rul2Engine.cpp
     src/SC4VersionDetection.cpp
     src/Settings.cpp
+    src/TerrainPreview.cpp
     src/TransitNetworkMapping.cpp
     src/TransportMenuPatch.cpp
     src/version.rc

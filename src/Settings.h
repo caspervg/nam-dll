@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 
 class Settings final
@@ -23,11 +24,8 @@ public:
 	bool ghostPreviewOverlay;
 	bool ghostPreviewGrading;
 	bool ghostPreviewWireframe;
-	int ghostPreviewColor[3];
-	float ghostPreviewAlphaScale;
-	float ghostPreviewDepthTolerance;
-	float ghostPreviewGradingOpacity;
-	int ghostPreviewCutColor[3];
-	int ghostPreviewFillColor[3];
+	uint8_t ghostPreviewColor[4];  // RGBA
+	uint8_t ghostPreviewCutColor[4];
+	uint8_t ghostPreviewFillColor[4];
 	bool enableKeyboardShortcuts;
 };
