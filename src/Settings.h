@@ -38,5 +38,10 @@ public:
 	int ghostPreviewCutColor[3];
 	int ghostPreviewFillColor[3];
 	bool enableDirtRoadRegionalTransportMapPatch;
+	bool enableUndergroundPlaceholderPatch;
+	bool enableBridgeShoreAbutmentPatch;
+	bool enableBridgeFarAbutmentClearancePatch;
+	bool enableParallelBridgesPatch;
+	bool enableBridgeDebugLog;
 	bool enableKeyboardShortcuts;
 };

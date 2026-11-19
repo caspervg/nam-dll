@@ -21,6 +21,7 @@ endif()
 set(NAM_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 
 set(NAM_SOURCES
+    src/BridgePatches.cpp
     src/Check4GBPatch.cpp
     src/CommuteLoop.cpp
     src/OverrideNetworkDrag.cpp
@@ -42,6 +43,7 @@ set(NAM_SOURCES
     src/TransitAccess.cpp
     src/TransitNetworkMapping.cpp
     src/TransportMenuPatch.cpp
+    src/UndergroundOccupants.cpp
     src/version.rc
 )
 

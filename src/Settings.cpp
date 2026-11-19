@@ -110,6 +110,11 @@ Settings::Settings() :
 	ghostPreviewCutColor{239, 28, 36},  // NAM hole digger red
 	ghostPreviewFillColor{63, 73, 206},  // NAM raiser blue
 	enableDirtRoadRegionalTransportMapPatch(true),
+	enableUndergroundPlaceholderPatch(true),
+	enableBridgeShoreAbutmentPatch(true),
+	enableBridgeFarAbutmentClearancePatch(true),
+	enableParallelBridgesPatch(false),
+	enableBridgeDebugLog(false),
 	enableKeyboardShortcuts(true) {};
 
 void Settings::Load(std::filesystem::path settingsFilePath)
@@ -187,6 +192,11 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readColorProp("GhostPreviewCutColor", ghostPreviewCutColor);
 			readColorProp("GhostPreviewFillColor", ghostPreviewFillColor);
 			readBoolProp("EnableDirtRoadRegionalTransportMapPatch", enableDirtRoadRegionalTransportMapPatch);
+			readBoolProp("EnableUndergroundPlaceholderPatch", enableUndergroundPlaceholderPatch);
+			readBoolProp("EnableBridgeShoreAbutmentPatch", enableBridgeShoreAbutmentPatch);
+			readBoolProp("EnableBridgeFarAbutmentClearancePatch", enableBridgeFarAbutmentClearancePatch);
+			readBoolProp("EnableParallelBridgesPatch", enableParallelBridgesPatch);
+			readBoolProp("EnableBridgeDebugLog", enableBridgeDebugLog);
 		} else {
 			logger.WriteLine(LogLevel::Info, "Using default settings, as no NAM.ini configuration file was detected.");
 		}
