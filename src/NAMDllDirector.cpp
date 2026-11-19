@@ -55,6 +55,7 @@
 #include "TransitAccess.h"
 #include "NeighborConnections.h"
 #include "GhostPreview.h"
+#include "DirtRoadRegionalTransportMap.h"
 #include "PathJumping.h"
 #include "TransitNetworkMapping.h"
 #include "TransportMenuPatch.h"
@@ -223,6 +224,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.enableDualNetworkTransitPatch, "Dual Network Transit patch", TransitNetworkMapping::Install);
 		InstallWhen(settings.enableTransportMenuPatch, "Transport Menu (Seaport/Airport) patch", TransportMenuPatch::Install);
 		InstallWhen(settings.enableGhostPreviewPatch, "Ghost Preview patch for puzzle pieces", [&settings](){ GhostPreview::Install(settings); });
+		InstallWhen(settings.enableDirtRoadRegionalTransportMapPatch, "DirtRoad/RHW Regional Transport Map patch", DirtRoadRegionalTransportMap::Install);
 		return overrideNetworkDrag;
 	}
 }

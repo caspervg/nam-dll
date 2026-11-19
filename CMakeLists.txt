@@ -25,6 +25,7 @@ set(NAM_SOURCES
     src/CommuteLoop.cpp
     src/OverrideNetworkDrag.cpp
     src/DirtRoadAccess.cpp
+    src/DirtRoadRegionalTransportMap.cpp
     src/FlexPieces.cpp
     src/GhostPreview.cpp
     src/TerrainPreview.cpp
