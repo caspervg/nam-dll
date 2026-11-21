@@ -97,6 +97,32 @@ set_target_properties(NAM PROPERTIES
     SUFFIX ".dll"
 )
 
+option(NAM_BUILD_TESTS "Build the unit tests" ON)
+
+if(NAM_BUILD_TESTS)
+    enable_testing()
+
+    # Compares the fast RUL2 loader with a port of the game's own loading code.
+    # Pass RUL2 files or packages as arguments to compare them as well.
+    add_executable(Rul2ParserTests
+        tests/Rul2ParserTests.cpp
+        src/RuleEquivalence.cpp
+    )
+
+    target_compile_features(Rul2ParserTests PRIVATE cxx_std_20)
+    target_include_directories(Rul2ParserTests PRIVATE "${NAM_ROOT}/src")
+    target_compile_definitions(Rul2ParserTests PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+    if(MSVC)
+        set_property(TARGET Rul2ParserTests PROPERTY
+            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+        )
+        target_compile_options(Rul2ParserTests PRIVATE /W3 /EHsc /permissive-)
+    endif()
+
+    add_test(NAME Rul2ParserTests COMMAND Rul2ParserTests)
+endif()
+
 set(NAM_PLUGIN_DIR "$ENV{USERPROFILE}/Documents/SimCity 4/Plugins"
     CACHE PATH "SimCity 4 Plugins directory used for post-build deployment"
 )
