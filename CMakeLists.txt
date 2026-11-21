@@ -29,7 +29,6 @@ set(NAM_SOURCES
     src/DirtRoadRegionalTransportMap.cpp
     src/FlexPieces.cpp
     src/GhostPreview.cpp
-    src/TerrainPreview.cpp
     src/Logger.cpp
     src/NAMDllDirector.cpp
     src/NeighborConnections.cpp
@@ -41,6 +40,7 @@ set(NAM_SOURCES
     src/SC4VersionDetection.cpp
     src/Settings.cpp
     src/TransitAccess.cpp
+    src/TerrainPreview.cpp
     src/TransitNetworkMapping.cpp
     src/TransportMenuPatch.cpp
     src/UndergroundOccupants.cpp
