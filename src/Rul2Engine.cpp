@@ -20,12 +20,11 @@
 #include <utility>
 #include "Logger.h"
 #include "Rul2Parser.h"
-#include "cIGZFile.h"
+#include "RZIniFile.h"
 #include "wil/result_macros.h"
 #include <chrono>
 #include <cstring>
 #include <memory>
-#include <new>
 #include <string_view>
 
 std::ostream& operator<<(std::ostream& os, const cSC4NetworkTool::tSolvedCell& t)
@@ -155,35 +154,12 @@ namespace
 	const pfn_LoadRuleOverrides LoadRuleOverrides = reinterpret_cast<pfn_LoadRuleOverrides>(0x63d3e0);
 	const pfn_sscanf sscanfSC4 = reinterpret_cast<pfn_sscanf>(0x9ef536);
 	constexpr uint32_t LoadRuleOverrides_CallSite = 0x625516;
-	constexpr ptrdiff_t cRZIniFile_File = 0x34;  // offset of the cIGZFile*
 
 	bool sVerifyFastLoading = false;
 
 	double millisecondsSince(std::chrono::steady_clock::time_point start)
 	{
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-	}
-
-	// Reads the whole RUL2 file. It is a record of a DBPF file, opened by the game before it creates the cRZIniFile.
-	std::unique_ptr<char[]> readRul2File(void* iniFile, uint32_t& size)
-	{
-		cIGZFile* const file = *reinterpret_cast<cIGZFile**>(static_cast<uint8_t*>(iniFile) + cRZIniFile_File);
-		if (file == nullptr || !file->IsOpen()) {
-			return nullptr;
-		}
-		size = file->Length();
-		std::unique_ptr<char[]> data(new (std::nothrow) char[size]);
-		if (data == nullptr) {
-			return nullptr;
-		}
-		file->SeekToBegin();
-		constexpr uint32_t blockSize = 4 * 1024 * 1024;
-		for (uint32_t offset = 0; offset < size; offset += blockSize) {
-			if (!file->Read(data.get() + offset, (std::min)(blockSize, size - offset))) {
-				return nullptr;
-			}
-		}
-		return data;
 	}
 
 	bool scanRuleOverride(std::string_view key, std::string_view value, cSC4NetworkTileConflictRule& rule)
@@ -210,7 +186,7 @@ namespace
 
 		start = std::chrono::steady_clock::now();
 		uint32_t size = 0;
-		const std::unique_ptr<char[]> data = readRul2File(iniFile, size);
+		const std::unique_ptr<char[]> data = RZIniFile::ReadAll(iniFile, size);
 		size_t count = 0, slowLines = 0, differences = 0;
 		const bool loaded = data != nullptr && Rul2Parser::ForEachRuleOverride(std::string_view(data.get(), size),
 			[&](const cSC4NetworkTileConflictRule& rule) {
@@ -255,7 +231,7 @@ namespace
 		const auto start = std::chrono::steady_clock::now();
 		uint32_t size = 0;
 		size_t count = 0;
-		const std::unique_ptr<char[]> data = readRul2File(iniFile, size);
+		const std::unique_ptr<char[]> data = RZIniFile::ReadAll(iniFile, size);
 		if (data != nullptr && Rul2Parser::ForEachRuleOverride(std::string_view(data.get(), size),
 				[&count](cSC4NetworkTileConflictRule& rule) { count++; addRuleOverride(&rule); }, scanRuleOverride)) {
 			logger.WriteLineFormatted(LogLevel::Info, "Loaded %u RUL2 override rules in %.0f ms.", static_cast<uint32_t>(count), millisecondsSince(start));
