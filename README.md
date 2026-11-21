@@ -79,6 +79,28 @@ See [LICENSE.txt](LICENSE.txt) for more information.
 * Update the post build events to copy the build output to you SimCity 4 application plugins folder.
 * Build the solution
 
+## Running the tests
+
+The fast RUL2 loader is compared with a port of the game's own loading code.
+This needs no SimCity 4 installation.
+
+```
+cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+To compare real RUL2 files as well, pass them (or the packages that contain them) to the test program:
+
+```
+build\Release\Rul2ParserTests.exe "C:\path\to\Plugins\NetworkAddonMod_Controller.dat"
+```
+
+Setting `VerifyRUL2FastLoading=true` in `NAM.ini` makes the DLL do the same comparison in the game,
+against the game's real loader, and write the result to `NAM.log`.
+
+Configure with `-DNAM_BUILD_TESTS=OFF` to skip the tests.
+
 ## Debugging the plugin
 
 Visual Studio can be configured to launch SimCity 4 on the Debugging page of the project properties.

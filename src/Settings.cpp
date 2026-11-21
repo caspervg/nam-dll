@@ -8,6 +8,8 @@ Settings::Settings() :
 	enableTunnels(true),
 	reduceFerryBridgeHeightPatch(true),
 	enableRUL2EnginePatch(true),
+	enableRUL2FastLoading(true),
+	verifyRUL2FastLoading(false),
 	enableNetworkSlopePatch(true),
 	enableFlexPuzzlePiecePatch(true),
 	enableCommuteLoopPatch(true),
@@ -33,6 +35,8 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableTunnels", enableTunnels);
 			readBoolProp("ReduceFerryBridgeHeight", reduceFerryBridgeHeightPatch);
 			readBoolProp("EnableRUL2EnginePatch", enableRUL2EnginePatch);
+			readBoolProp("EnableRUL2FastLoading", enableRUL2FastLoading);
+			readBoolProp("VerifyRUL2FastLoading", verifyRUL2FastLoading);
 			readBoolProp("EnableNetworkSlopePatch", enableNetworkSlopePatch);
 			readBoolProp("EnableFlexPuzzlePiecePatch", enableFlexPuzzlePiecePatch);
 			readBoolProp("EnableCommuteLoopPatch", enableCommuteLoopPatch);
