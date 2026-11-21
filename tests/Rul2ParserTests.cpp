@@ -7,11 +7,11 @@
 //   Rul2ParserTests "C:\...\Plugins\NetworkAddonMod_Controller.dat" ...
 #include "Rul2Parser.h"
 #include "RuleEquivalence.h"
+#include "IniFileReference.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <iterator>
 #include <random>
 #include <string>
@@ -29,72 +29,11 @@ namespace
 		return Rul2Parser::ScanRule(sscanf, key, value, rule);
 	}
 
-	// A port of the parts of cRZIniFile that the game uses to load RUL2, kept as
-	// close to the disassembly as possible (and therefore slow).
+	// A port of how the game loads RUL2 with cRZIniFile, kept as close to the
+	// disassembly as possible (and therefore slow).
 	namespace Reference
 	{
-		struct File
-		{
-			std::string_view data;
-			uint32_t pos = 0;
-
-			uint32_t Length() const { return static_cast<uint32_t>(data.size()); }
-			uint32_t SeekToPosition(uint32_t newPos) { return pos = std::min(newPos, Length()); }
-			bool Read(char* out, uint32_t count)
-			{
-				if (count > Length() - pos) {
-					return false;
-				}
-				std::memcpy(out, data.data() + pos, count);
-				pos += count;
-				return true;
-			}
-		};
-
-		// cRZIniFile::ReadLine (0x91ca15)
-		bool ReadLine(File& file, std::string& line)
-		{
-			std::string result;
-			bool success = false;
-			bool newlineFound = false;
-			uint32_t blockStart = file.pos;
-			uint32_t remaining = file.Length() - blockStart;
-			char block[0x2a] = {};
-			while (remaining != 0) {
-				const uint32_t count = std::min<uint32_t>(remaining, 0x28);
-				if (!file.Read(block, count)) {
-					break;
-				}
-				remaining -= count;
-				success = true;
-				uint32_t i = 0;
-				for (; i < count; i++) {
-					if (block[i] == '\r' || block[i] == '\n') {
-						newlineFound = true;
-						file.SeekToPosition(blockStart + i);
-						char c;
-						bool read;
-						while ((read = file.Read(&c, 1)) && (c == '\r' || c == '\n')) {
-						}
-						if (read) {
-							file.SeekToPosition(file.pos - 1);
-						}
-						break;
-					}
-				}
-				block[i] = '\0';
-				result.append(block);  // as a C string
-				if (newlineFound) {
-					break;
-				}
-				blockStart = file.pos;
-			}
-			line = result;
-			return success;
-		}
-
-		void TrimLeft(std::string& s) { s.erase(0, s.find_first_not_of(" \t")); }
-		void TrimRight(std::string& s) { s.erase(s.find_last_not_of(" \t") + 1); }
+		using namespace IniFileReference;
 
 		// cRZIniFile::Open (0x91db73), cRZIniFile::EnumEntries (0x91d91c) and the
 		// loader at 0x63d3e0. Returns false where the port is not exact: section
@@ -373,47 +312,13 @@ namespace
 		Expect(accepted > 50000 && rules > 100000 && slow > 10000, "random inputs should exercise both paths");
 	}
 
-	// Returns the RUL2 text of a file: the file itself, or the entry inside a DBPF package.
-	bool ReadRul2(const char* path, std::string& text)
-	{
-		std::ifstream file(path, std::ios::binary);
-		std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-		if (!file || content.empty()) {
-			return false;
-		}
-		if (content.compare(0, 4, "DBPF") != 0) {
-			text = std::move(content);
-			return true;
-		}
-		const auto u32 = [&content](size_t offset) {
-			uint32_t value = 0;
-			if (offset + 4 <= content.size()) {
-				std::memcpy(&value, content.data() + offset, 4);
-			}
-			return value;
-		};
-		const uint32_t count = u32(36), index = u32(40);
-		for (uint32_t i = 0; i < count; i++) {
-			const size_t entry = index + i * size_t{20};
-			if (u32(entry) == 0x0a5bcf4b && u32(entry + 4) == 0xaa5bcf57 && u32(entry + 8) == 0x10000002) {
-				const uint32_t offset = u32(entry + 12), size = u32(entry + 16);
-				if (size_t{offset} + size > content.size() || (size > 6 && u32(offset + 4) << 16 == 0xfb100000)) {
-					return false;  // truncated or compressed
-				}
-				text = content.substr(offset, size);
-				return true;
-			}
-		}
-		return false;
-	}
-
 	void TestFile(const char* path)
 	{
 		using Clock = std::chrono::steady_clock;
 		const auto ms = [](Clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
 
 		std::string text;
-		if (!ReadRul2(path, text)) {
+		if (!IniFileReference::ReadRulFile(path, 0x10000002, text)) {
 			failures++;
 			printf("FAILED: no uncompressed RUL2 found in %s\n", path);
 			return;

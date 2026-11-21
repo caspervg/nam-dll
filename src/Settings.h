@@ -15,6 +15,8 @@ public:
 	bool enableRUL2EnginePatch;
 	bool enableRUL2FastLoading;
 	bool verifyRUL2FastLoading;
+	bool enableRUL0FastLoading;
+	bool verifyRUL0FastLoading;
 	bool enableNetworkSlopePatch;
 	bool enableFlexPuzzlePiecePatch;
 	bool enableCommuteLoopPatch;

@@ -36,6 +36,7 @@ set(NAM_SOURCES
     src/Patching.cpp
     src/PathJumping.cpp
     src/RuleEquivalence.cpp
+    src/Rul0FastLoading.cpp
     src/Rul2Engine.cpp
     src/SC4VersionDetection.cpp
     src/Settings.cpp
@@ -163,18 +164,25 @@ if(NAM_BUILD_TESTS)
         src/RuleEquivalence.cpp
     )
 
-    target_compile_features(Rul2ParserTests PRIVATE cxx_std_20)
-    target_include_directories(Rul2ParserTests PRIVATE "${NAM_ROOT}/src")
-    target_compile_definitions(Rul2ParserTests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    # The same for the fast RUL0 loader, with RUL0 files or packages as arguments.
+    add_executable(Rul0ParserTests
+        tests/Rul0ParserTests.cpp
+    )
 
-    if(MSVC)
-        set_property(TARGET Rul2ParserTests PROPERTY
-            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
-        )
-        target_compile_options(Rul2ParserTests PRIVATE /W3 /EHsc /permissive-)
-    endif()
+    foreach(test_target Rul2ParserTests Rul0ParserTests)
+        target_compile_features(${test_target} PRIVATE cxx_std_20)
+        target_include_directories(${test_target} PRIVATE "${NAM_ROOT}/src")
+        target_compile_definitions(${test_target} PRIVATE _CRT_SECURE_NO_WARNINGS)
 
-    add_test(NAME Rul2ParserTests COMMAND Rul2ParserTests)
+        if(MSVC)
+            set_property(TARGET ${test_target} PROPERTY
+                MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+            )
+            target_compile_options(${test_target} PRIVATE /W3 /EHsc /permissive-)
+        endif()
+
+        add_test(NAME ${test_target} COMMAND ${test_target})
+    endforeach()
 endif()
 
 set(NAM_PLUGIN_DIR "$ENV{USERPROFILE}/Documents/SimCity 4/Plugins"

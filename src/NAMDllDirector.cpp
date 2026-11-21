@@ -48,6 +48,7 @@
 #include "Patching.h"
 #include "Rul2Engine.h"
 #include "OverrideNetworkDrag.h"
+#include "Rul0FastLoading.h"
 #include "NetworkSlopes.h"
 #include "FlexPieces.h"
 #include "CommuteLoop.h"
@@ -205,6 +206,7 @@ noMatchingTunnelNetwork:
 			overrideNetworkDrag = InstallWhen(true, "Override Network Drag patch", OverrideNetworkDrag::Install);
 		}
 		InstallWhen(settings.enableRUL2EnginePatch && settings.enableRUL2FastLoading, "RUL2 Fast Loading patch", [&settings]() { Rul2Engine::InstallFastLoading(settings.verifyRUL2FastLoading); });
+		InstallWhen(settings.enableRUL0FastLoading, "RUL0 Fast Loading patch", [&settings]() { Rul0FastLoading::Install(settings.verifyRUL0FastLoading); });
 		InstallWhen(settings.enableNetworkSlopePatch, "Network Slopes patch", NetworkSlopes::Install);
 		InstallWhen(settings.enableFlexPuzzlePiecePatch, "FLEX Puzzle Piece RUL0 patch", FlexPieces::Install);
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
