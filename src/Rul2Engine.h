@@ -14,4 +14,5 @@ namespace Rul2Engine
 
 	// Diagnostics: logs the cells of the drags solved from now on, before and after the overrides (log level Debug).
 	void SetDragLog(bool enabled);
+	void InstallFastLoading(bool verify);  // needs Install()
 }

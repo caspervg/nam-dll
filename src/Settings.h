@@ -13,6 +13,8 @@ public:
 	bool enableTunnels;
 	bool reduceFerryBridgeHeightPatch;
 	bool enableRUL2EnginePatch;
+	bool enableRUL2FastLoading;
+	bool verifyRUL2FastLoading;
 	bool enableNetworkSlopePatch;
 	bool enableFlexPuzzlePiecePatch;
 	bool enableCommuteLoopPatch;

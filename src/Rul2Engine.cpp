@@ -19,6 +19,14 @@
 #include "RuleEquivalence.h"
 #include <utility>
 #include "Logger.h"
+#include "Rul2Parser.h"
+#include "cIGZFile.h"
+#include "wil/result_macros.h"
+#include <chrono>
+#include <cstring>
+#include <memory>
+#include <new>
+#include <string_view>
 
 std::ostream& operator<<(std::ostream& os, const cSC4NetworkTool::tSolvedCell& t)
 {
@@ -53,7 +61,12 @@ namespace
 	typedef Rul2PatchResult (__thiscall* pfn_cSC4NetworkTool_PatchTilePair)(cSC4NetworkTool* pThis, MultiMapRange const& range, cSC4NetworkTool::tSolvedCell& cell1, cSC4NetworkTool::tSolvedCell& cell2, int8_t dir);
 	// pfn_cSC4NetworkTool_PatchTilePair PatchTilePair = reinterpret_cast<pfn_cSC4NetworkTool_PatchTilePair>(0x6337e0);
 
+	std::vector<cSC4NetworkTileConflictRule>* sRecordedRules = nullptr;  // only set while verifying the fast loader
+
 	void addRuleOverride(cSC4NetworkTileConflictRule* rule) {
+		if (sRecordedRules != nullptr) {
+			sRecordedRules->push_back(*rule);
+		}
 		if (rule->_2.id != 0) {  // we don't check _1.id != 0 as vanilla doesn't do that either, presumably
 			sTileConflictRules2.insert(*rule);
 		} else {
@@ -131,6 +144,125 @@ namespace
 			pop eax;  // restore
 			push AddRuleOverrides_Return;
 			ret;
+		}
+	}
+
+	// The game loads the RUL2 file with cRZIniFile, which reads it in 40 byte steps, builds two strings per line and
+	// keeps all lines in a vector before each one goes through sscanf twice. For the NAM this takes several seconds
+	// on the first city load. The code below replaces that with Rul2Parser working on the whole file in memory.
+	typedef void (__cdecl* pfn_LoadRuleOverrides)(void* iniFile, const char* section);
+	typedef int (__cdecl* pfn_sscanf)(const char* buffer, const char* format, ...);
+	const pfn_LoadRuleOverrides LoadRuleOverrides = reinterpret_cast<pfn_LoadRuleOverrides>(0x63d3e0);
+	const pfn_sscanf sscanfSC4 = reinterpret_cast<pfn_sscanf>(0x9ef536);
+	constexpr uint32_t LoadRuleOverrides_CallSite = 0x625516;
+	constexpr ptrdiff_t cRZIniFile_File = 0x34;  // offset of the cIGZFile*
+
+	bool sVerifyFastLoading = false;
+
+	double millisecondsSince(std::chrono::steady_clock::time_point start)
+	{
+		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+	}
+
+	// Reads the whole RUL2 file. It is a record of a DBPF file, opened by the game before it creates the cRZIniFile.
+	std::unique_ptr<char[]> readRul2File(void* iniFile, uint32_t& size)
+	{
+		cIGZFile* const file = *reinterpret_cast<cIGZFile**>(static_cast<uint8_t*>(iniFile) + cRZIniFile_File);
+		if (file == nullptr || !file->IsOpen()) {
+			return nullptr;
+		}
+		size = file->Length();
+		std::unique_ptr<char[]> data(new (std::nothrow) char[size]);
+		if (data == nullptr) {
+			return nullptr;
+		}
+		file->SeekToBegin();
+		constexpr uint32_t blockSize = 4 * 1024 * 1024;
+		for (uint32_t offset = 0; offset < size; offset += blockSize) {
+			if (!file->Read(data.get() + offset, (std::min)(blockSize, size - offset))) {
+				return nullptr;
+			}
+		}
+		return data;
+	}
+
+	bool scanRuleOverride(std::string_view key, std::string_view value, cSC4NetworkTileConflictRule& rule)
+	{
+		return Rul2Parser::ScanRule(sscanfSC4, key, value, rule);
+	}
+
+	bool sameTile(const Tile& a, const Tile& b)
+	{
+		return a.id == b.id && a.rf == b.rf;
+	}
+
+	// Debugging aid: lets the game load the rules as usual, then runs the fast loader on the same file and
+	// reports rules that differ.
+	void loadRuleOverridesVerified(void* iniFile, const char* section)
+	{
+		Logger& logger = Logger::GetInstance();
+		std::vector<cSC4NetworkTileConflictRule> expected;
+		sRecordedRules = &expected;
+		auto start = std::chrono::steady_clock::now();
+		LoadRuleOverrides(iniFile, section);
+		const double originalTime = millisecondsSince(start);
+		sRecordedRules = nullptr;
+
+		start = std::chrono::steady_clock::now();
+		uint32_t size = 0;
+		const std::unique_ptr<char[]> data = readRul2File(iniFile, size);
+		size_t count = 0, slowLines = 0, differences = 0;
+		const bool loaded = data != nullptr && Rul2Parser::ForEachRuleOverride(std::string_view(data.get(), size),
+			[&](const cSC4NetworkTileConflictRule& rule) {
+				const size_t i = count++;
+				if (i < expected.size() && sameTile(rule._1, expected[i]._1) && sameTile(rule._2, expected[i]._2)
+					&& sameTile(rule._3, expected[i]._3) && sameTile(rule._4, expected[i]._4)) {
+					return;
+				}
+				if (differences++ < 10) {
+					logger.WriteLineFormatted(LogLevel::Error, "RUL2 verification: rule %u differs: 0x%08x,%u,0x%08x,%u=0x%08x,%u,0x%08x,%u",
+						static_cast<uint32_t>(i), rule._1.id, rule._1.rf, rule._2.id, rule._2.rf, rule._3.id, rule._3.rf, rule._4.id, rule._4.rf);
+				}
+			},
+			[&slowLines](std::string_view key, std::string_view value, cSC4NetworkTileConflictRule& rule) {
+				slowLines++;
+				return scanRuleOverride(key, value, rule);
+			});
+		const double fastTime = millisecondsSince(start);
+
+		if (!loaded) {
+			logger.WriteLine(LogLevel::Info, "RUL2 verification: the fast loader would leave this file to the game.");
+		} else {
+			if (count < expected.size()) {
+				differences += expected.size() - count;
+			}
+			logger.WriteLineFormatted(differences == 0 ? LogLevel::Info : LogLevel::Error,
+				"RUL2 verification: game loaded %u rules in %.0f ms, fast loader %u rules in %.0f ms (%u lines through sscanf), %u differences.",
+				static_cast<uint32_t>(expected.size()), originalTime, static_cast<uint32_t>(count), fastTime,
+				static_cast<uint32_t>(slowLines), static_cast<uint32_t>(differences));
+		}
+	}
+
+	// Replaces the game's call of LoadRuleOverrides(iniFile, "RuleOverrides").
+	void LoadRuleOverridesFast(void* iniFile, const char* section)
+	{
+		if (sVerifyFastLoading) {
+			loadRuleOverridesVerified(iniFile, section);
+			return;
+		}
+
+		Logger& logger = Logger::GetInstance();
+		const auto start = std::chrono::steady_clock::now();
+		uint32_t size = 0;
+		size_t count = 0;
+		const std::unique_ptr<char[]> data = readRul2File(iniFile, size);
+		if (data != nullptr && Rul2Parser::ForEachRuleOverride(std::string_view(data.get(), size),
+				[&count](cSC4NetworkTileConflictRule& rule) { count++; addRuleOverride(&rule); }, scanRuleOverride)) {
+			logger.WriteLineFormatted(LogLevel::Info, "Loaded %u RUL2 override rules in %.0f ms.", static_cast<uint32_t>(count), millisecondsSince(start));
+		} else {
+			// no rule was added yet, so the game can load the file from the start
+			logger.WriteLine(LogLevel::Info, "Left loading of the RUL2 override rules to the game.");
+			LoadRuleOverrides(iniFile, section);
 		}
 	}
 
@@ -552,4 +684,16 @@ void Rul2Engine::SetOverrideDragSeed(uint32_t tileId, RotFlip rotFlip, uint32_t 
 	sOverrideDragTile = tileId;
 	sOverrideDragRotFlip = rotFlip;
 	sOverrideDragStart = startXz;
+}
+
+void Rul2Engine::InstallFastLoading(bool verify)
+{
+	// the hook falls back to LoadRuleOverrides, so this has to be the call of it
+	const uint8_t* const callSite = reinterpret_cast<uint8_t*>(LoadRuleOverrides_CallSite);
+	int32_t offset;
+	std::memcpy(&offset, callSite + 1, sizeof(offset));
+	THROW_HR_IF(E_FAIL, callSite[0] != 0xE8 || LoadRuleOverrides_CallSite + 5 + offset != reinterpret_cast<uint32_t>(LoadRuleOverrides));
+
+	sVerifyFastLoading = verify;
+	Patching::InstallCallHook(LoadRuleOverrides_CallSite, reinterpret_cast<void (*)(void)>(LoadRuleOverridesFast));
 }

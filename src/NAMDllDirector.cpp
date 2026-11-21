@@ -204,6 +204,7 @@ noMatchingTunnelNetwork:
 		if (InstallWhen(settings.enableRUL2EnginePatch, "RUL2 Engine patch", Rul2Engine::Install)) {
 			overrideNetworkDrag = InstallWhen(true, "Override Network Drag patch", OverrideNetworkDrag::Install);
 		}
+		InstallWhen(settings.enableRUL2EnginePatch && settings.enableRUL2FastLoading, "RUL2 Fast Loading patch", [&settings]() { Rul2Engine::InstallFastLoading(settings.verifyRUL2FastLoading); });
 		InstallWhen(settings.enableNetworkSlopePatch, "Network Slopes patch", NetworkSlopes::Install);
 		InstallWhen(settings.enableFlexPuzzlePiecePatch, "FLEX Puzzle Piece RUL0 patch", FlexPieces::Install);
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
