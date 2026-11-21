@@ -31,6 +31,7 @@ set(NAM_SOURCES
     src/Patching.cpp
     src/PathJumping.cpp
     src/RuleEquivalence.cpp
+    src/Rul0FastLoading.cpp
     src/Rul2Engine.cpp
     src/SC4VersionDetection.cpp
     src/Settings.cpp

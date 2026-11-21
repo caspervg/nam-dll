@@ -81,7 +81,7 @@ See [LICENSE.txt](LICENSE.txt) for more information.
 
 ## Running the tests
 
-The fast RUL2 loader is compared with a port of the game's own loading code.
+The fast RUL2 and RUL0 loaders are compared with a port of the game's own loading code.
 This needs no SimCity 4 installation.
 
 ```
@@ -90,14 +90,17 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-To compare real RUL2 files as well, pass them (or the packages that contain them) to the test program:
+To compare real RUL2 or RUL0 files as well, pass them (or the packages that contain them) to the test programs:
 
 ```
 build\Release\Rul2ParserTests.exe "C:\path\to\Plugins\NetworkAddonMod_Controller.dat"
+build\Release\Rul0ParserTests.exe "C:\path\to\Plugins\NetworkAddonMod_Controller.dat"
 ```
 
 Setting `VerifyRUL2FastLoading=true` in `NAM.ini` makes the DLL do the same comparison in the game,
 against the game's real loader, and write the result to `NAM.log`.
+With `VerifyRUL0FastLoading=true` the game loads the puzzle pieces as usual, the fast loader loads them
+a second time, and the log tells whether both ended up with the same pieces.
 
 Configure with `-DNAM_BUILD_TESTS=OFF` to skip the tests.
 

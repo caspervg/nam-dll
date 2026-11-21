@@ -10,6 +10,8 @@ Settings::Settings() :
 	enableRUL2EnginePatch(true),
 	enableRUL2FastLoading(true),
 	verifyRUL2FastLoading(false),
+	enableRUL0FastLoading(true),
+	verifyRUL0FastLoading(false),
 	enableNetworkSlopePatch(true),
 	enableFlexPuzzlePiecePatch(true),
 	enableCommuteLoopPatch(true),
@@ -37,6 +39,8 @@ void Settings::Load(std::filesystem::path settingsFilePath)
 			readBoolProp("EnableRUL2EnginePatch", enableRUL2EnginePatch);
 			readBoolProp("EnableRUL2FastLoading", enableRUL2FastLoading);
 			readBoolProp("VerifyRUL2FastLoading", verifyRUL2FastLoading);
+			readBoolProp("EnableRUL0FastLoading", enableRUL0FastLoading);
+			readBoolProp("VerifyRUL0FastLoading", verifyRUL0FastLoading);
 			readBoolProp("EnableNetworkSlopePatch", enableNetworkSlopePatch);
 			readBoolProp("EnableFlexPuzzlePiecePatch", enableFlexPuzzlePiecePatch);
 			readBoolProp("EnableCommuteLoopPatch", enableCommuteLoopPatch);

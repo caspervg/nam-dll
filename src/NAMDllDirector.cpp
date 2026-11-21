@@ -47,6 +47,7 @@
 #include "wil/win32_helpers.h"
 #include "Patching.h"
 #include "Rul2Engine.h"
+#include "Rul0FastLoading.h"
 #include "NetworkSlopes.h"
 #include "FlexPieces.h"
 #include "CommuteLoop.h"
@@ -192,6 +193,7 @@ noMatchingTunnelNetwork:
 		InstallWhen(settings.reduceFerryBridgeHeightPatch, "Ferry Bridge Height patch", InstallFerryBridgeHeightPatch);
 		InstallWhen(settings.enableRUL2EnginePatch, "RUL2 Engine patch", Rul2Engine::Install);
 		InstallWhen(settings.enableRUL2EnginePatch && settings.enableRUL2FastLoading, "RUL2 Fast Loading patch", [&settings]() { Rul2Engine::InstallFastLoading(settings.verifyRUL2FastLoading); });
+		InstallWhen(settings.enableRUL0FastLoading, "RUL0 Fast Loading patch", [&settings]() { Rul0FastLoading::Install(settings.verifyRUL0FastLoading); });
 		InstallWhen(settings.enableNetworkSlopePatch, "Network Slopes patch", NetworkSlopes::Install);
 		InstallWhen(settings.enableFlexPuzzlePiecePatch, "FLEX Puzzle Piece RUL0 patch", FlexPieces::Install);
 		InstallWhen(settings.enableCommuteLoopPatch, "Eternal Commute Loop patch", CommuteLoop::Install);
